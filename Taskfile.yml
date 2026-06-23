@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+vars:
+  SERVICES:
+    - order-service
+  DOCKER_TAG: dev
+
+tasks:
+  fmt:
+    desc: Форматирование кода во всех сервисах
+    cmds:
+      - for: { var: SERVICES }
+        cmd: golangci-lint fmt ./services/{{.ITEM}}/...
+
+  test:unit:
+    desc: Юнит-тесты всех сервисов
+    cmds:
+      - for: { var: SERVICES }
+        cmd: go test -v -race ./services/{{.ITEM}}/...
+    silent: true
+
+  lint:
+    desc: Линтеры всех сервисов
+    cmds:
+      - for: { var: SERVICES }
+        cmd: golangci-lint run ./services/{{.ITEM}}/... --fix --max-same-issues=0
+    silent: true
+
+  build:
+    desc: Сборка бинарников всех сервисов в bin/
+    cmds:
+      - for: { var: SERVICES }
+        cmd: go build -o bin/{{.ITEM}} ./services/{{.ITEM}}/cmd/main.go
+    silent: true
+
+  run:
+    desc: Запуск сервиса локально (task run SERVICE=order-service)
+    requires:
+      vars: [SERVICE]
+    cmds:
+      - go run ./services/{{.SERVICE}}/cmd/main.go
+    silent: true
+
+  docker:build:
+    desc: Сборка dev-образов ({{.ITEM}}:{{.DOCKER_TAG}}) для всех сервисов
+    cmds:
+      - for: { var: SERVICES }
+        cmd: docker build -f services/{{.ITEM}}/deploy/Dockerfile -t {{.ITEM}}:{{.DOCKER_TAG}} services/{{.ITEM}}
+    silent: true
+
+  docker:run:
+    desc: Запуск контейнера (task docker:run SERVICE=order-service)
+    requires:
+      vars: [SERVICE]
+    cmds:
+      - docker run --rm -p 8080:8080 {{.SERVICE}}:{{.DOCKER_TAG}}
+    silent: true

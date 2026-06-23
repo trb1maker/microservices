@@ -1,0 +1,155 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  GO_VERSION: "1.26.4"
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.services.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect affected services
+        id: services
+        shell: bash
+        run: |
+          all_services=$(find services -mindepth 2 -maxdepth 2 -name go.mod -exec dirname {} \; | xargs -n1 basename | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
+
+          if [ "$all_services" = "[]" ] || [ -z "$all_services" ]; then
+            echo "services=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "services=$all_services" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base_ref="${{ github.base_ref }}"
+          git fetch origin "${base_ref}" --depth=1
+
+          changed_files=$(git diff --name-only "origin/${base_ref}"...HEAD)
+
+          shared_changed=false
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            case "$file" in
+              .golangci.yaml|go.work|go.work.sum|Taskfile.yml)
+                shared_changed=true
+                break
+                ;;
+              .github/workflows/*)
+                shared_changed=true
+                break
+                ;;
+            esac
+          done <<< "$changed_files"
+
+          if [ "$shared_changed" = true ]; then
+            echo "services=$all_services" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          affected=()
+          while IFS= read -r service; do
+            [ -z "$service" ] && continue
+            if echo "$changed_files" | grep -qE "^services/${service}/"; then
+              affected+=("$service")
+            fi
+          done < <(echo "$all_services" | jq -r '.[]')
+
+          if [ "${#affected[@]}" -eq 0 ]; then
+            echo "services=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          services_json=$(printf '%s\n' "${affected[@]}" | jq -R . | jq -s -c .)
+          echo "services=$services_json" >> "$GITHUB_OUTPUT"
+
+  ci:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.services != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            services/${{ matrix.service }}/go.sum
+            go.work.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+          args: --config .golangci.yaml ./services/${{ matrix.service }}/...
+
+      - name: Unit tests
+        run: go test -race ./services/${{ matrix.service }}/...
+
+      - name: Build binary
+        run: go build -o bin/${{ matrix.service }} ./services/${{ matrix.service }}/cmd/main.go
+
+      - name: Docker build and smoke test
+        id: docker
+        run: |
+          dockerfile="services/${{ matrix.service }}/deploy/Dockerfile"
+          if [ ! -f "$dockerfile" ]; then
+            echo "has_image=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          docker build -f "$dockerfile" -t ${{ matrix.service }}:ci services/${{ matrix.service }}
+
+          container_name="${{ matrix.service }}-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker run -d --name "$container_name" -p 8080:8080 ${{ matrix.service }}:ci
+
+          for _ in $(seq 1 10); do
+            if curl -fsS http://localhost:8080/health; then
+              docker rm -f "$container_name"
+              echo "has_image=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          docker logs "$container_name"
+          docker rm -f "$container_name"
+          exit 1
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.docker.outputs.has_image == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.docker.outputs.has_image == 'true'
+        run: |
+          image="ghcr.io/${{ github.repository }}/${{ matrix.service }}"
+          docker tag ${{ matrix.service }}:ci "${image}:${{ github.sha }}"
+          docker tag ${{ matrix.service }}:ci "${image}:latest"
+          docker push "${image}:${{ github.sha }}"
+          docker push "${image}:latest"
