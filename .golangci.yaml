@@ -1,0 +1,82 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    # errors
+    - err113
+    - errorlint
+    - wrapcheck
+
+    # context & HTTP
+    - bodyclose
+    - contextcheck
+    - noctx
+    - fatcontext
+
+    # PostgreSQL
+    - rowserrcheck
+    - sqlclosecheck
+
+    # observability
+    - spancheck
+    - promlinter
+    - sloglint
+
+    # gRPC / protobuf
+    - protogetter
+
+    # domain modeling
+    - errname
+    - exhaustive
+    - iface
+    - musttag
+
+    # complexity
+    - funlen
+    - gocognit
+    - goconst
+    - mnd
+
+    # quality
+    - copyloopvar
+    - gocritic
+    - gosec
+    - misspell
+    - modernize
+    - nolintlint
+    - revive
+
+    # tests
+    - testifylint
+    - thelper
+    - tparallel
+
+  settings:
+    funlen:
+      lines: 80
+      statements: 50
+    gocognit:
+      min-complexity: 20
+    revive:
+      rules:
+        - name: package-comments
+          disabled: true
+
+  exclusions:
+    generated: strict
+    rules:
+      - path: _test\.go
+        linters:
+          - funlen
+          - gocognit
+
+formatters:
+  enable:
+    - gofumpt
+
+run:
+  timeout: 5m
+  allow-parallel-runners: true
+  go: "1.26.4"
+  concurrency: 4
