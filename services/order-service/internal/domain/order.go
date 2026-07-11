@@ -32,14 +32,15 @@ const (
 )
 
 type Order struct {
-	orderID    OrderID
-	userID     UserID
-	items      []OrderItem
-	totalPrice int64
-	status     OrderStatus
-	paymentID  PaymentID
-	createdAt  time.Time
-	updatedAt  time.Time
+	orderID         OrderID
+	userID          UserID
+	items           []OrderItem
+	totalPrice      int64
+	status          OrderStatus
+	paymentID       PaymentID
+	deliveryAddress string
+	createdAt       time.Time
+	updatedAt       time.Time
 }
 
 func NewOrder(
@@ -47,6 +48,7 @@ func NewOrder(
 	userID UserID,
 	status OrderStatus,
 	paymentID PaymentID,
+	deliveryAddress string,
 	createdAt time.Time,
 	updatedAt time.Time,
 	items ...OrderItem,
@@ -85,14 +87,15 @@ func NewOrder(
 	}
 
 	return &Order{
-		orderID:    orderID,
-		userID:     userID,
-		items:      items,
-		totalPrice: totalPrice,
-		status:     status,
-		paymentID:  paymentID,
-		createdAt:  createdAt,
-		updatedAt:  updatedAt,
+		orderID:         orderID,
+		userID:          userID,
+		items:           items,
+		totalPrice:      totalPrice,
+		status:          status,
+		paymentID:       paymentID,
+		deliveryAddress: deliveryAddress,
+		createdAt:       createdAt,
+		updatedAt:       updatedAt,
 	}, nil
 }
 
@@ -118,6 +121,10 @@ func (o *Order) Status() OrderStatus {
 
 func (o *Order) PaymentID() PaymentID {
 	return o.paymentID
+}
+
+func (o *Order) DeliveryAddress() string {
+	return o.deliveryAddress
 }
 
 func (o *Order) CreatedAt() time.Time {

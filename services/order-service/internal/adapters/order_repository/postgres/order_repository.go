@@ -22,12 +22,13 @@ func NewOrderRepository(pool *pgxpool.Pool) *OrderRepository {
 }
 
 type orderRow struct {
-	userID     uuid.UUID
-	status     string
-	totalPrice int64
-	paymentID  *uuid.UUID
-	createdAt  time.Time
-	updatedAt  time.Time
+	userID          uuid.UUID
+	status          string
+	totalPrice      int64
+	paymentID       *uuid.UUID
+	deliveryAddress string
+	createdAt       time.Time
+	updatedAt       time.Time
 }
 
 func (r *OrderRepository) Get(ctx context.Context, orderID domain.OrderID) (*domain.Order, error) {
@@ -46,7 +47,7 @@ func (r *OrderRepository) Get(ctx context.Context, orderID domain.OrderID) (*dom
 
 func (r *OrderRepository) fetchOrderRow(ctx context.Context, orderID domain.OrderID) (*orderRow, error) {
 	const orderQuery = `
-		SELECT user_id, status, total_price, payment_id, created_at, updated_at
+		SELECT user_id, status, total_price, payment_id, delivery_address, created_at, updated_at
 		FROM orders
 		WHERE order_id = $1`
 
@@ -57,6 +58,7 @@ func (r *OrderRepository) fetchOrderRow(ctx context.Context, orderID domain.Orde
 		&row.status,
 		&row.totalPrice,
 		&row.paymentID,
+		&row.deliveryAddress,
 		&row.createdAt,
 		&row.updatedAt,
 	)
@@ -123,6 +125,7 @@ func buildOrder(orderID domain.OrderID, row *orderRow, items []domain.OrderItem)
 		domain.UserID(row.userID),
 		domain.OrderStatus(row.status),
 		payment,
+		row.deliveryAddress,
 		row.createdAt,
 		row.updatedAt,
 		items...,
@@ -148,12 +151,13 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 	}
 
 	const upsertOrder = `
-		INSERT INTO orders (order_id, user_id, status, total_price, payment_id, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO orders (order_id, user_id, status, total_price, payment_id, delivery_address, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (order_id) DO UPDATE SET
 			status = EXCLUDED.status,
 			total_price = EXCLUDED.total_price,
 			payment_id = EXCLUDED.payment_id,
+			delivery_address = EXCLUDED.delivery_address,
 			updated_at = EXCLUDED.updated_at`
 
 	_, err = tx.Exec(
@@ -164,6 +168,7 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 		string(order.Status()),
 		order.TotalPrice(),
 		paymentID,
+		order.DeliveryAddress(),
 		order.CreatedAt(),
 		order.UpdatedAt(),
 	)
@@ -193,6 +198,30 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 		if err != nil {
 			return fmt.Errorf("insert order item: %w", err)
 		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+
+	return nil
+}
+
+func (r *OrderRepository) Delete(ctx context.Context, orderID domain.OrderID) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	const deleteItems = `DELETE FROM order_items WHERE order_id = $1`
+	if _, err := tx.Exec(ctx, deleteItems, uuid.UUID(orderID)); err != nil {
+		return fmt.Errorf("delete order items: %w", err)
+	}
+
+	const deleteOrder = `DELETE FROM orders WHERE order_id = $1`
+	if _, err := tx.Exec(ctx, deleteOrder, uuid.UUID(orderID)); err != nil {
+		return fmt.Errorf("delete order: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {

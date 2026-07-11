@@ -101,13 +101,14 @@ type orderItemResponse struct {
 }
 
 type orderResponse struct {
-	OrderID    string              `json:"order_id"`
-	UserID     string              `json:"user_id"`
-	Status     string              `json:"status"`
-	TotalPrice int64               `json:"total_price"`
-	Items      []orderItemResponse `json:"items"`
-	CreatedAt  string              `json:"created_at"`
-	UpdatedAt  string              `json:"updated_at"`
+	OrderID         string              `json:"order_id"`
+	UserID          string              `json:"user_id"`
+	Status          string              `json:"status"`
+	TotalPrice      int64               `json:"total_price"`
+	DeliveryAddress string              `json:"delivery_address"`
+	Items           []orderItemResponse `json:"items"`
+	CreatedAt       string              `json:"created_at"`
+	UpdatedAt       string              `json:"updated_at"`
 }
 
 func toCartResponse(cart *domain.Cart) cartResponse {
@@ -141,13 +142,14 @@ func toOrderResponse(order *domain.Order) orderResponse {
 	}
 
 	return orderResponse{
-		OrderID:    uuidToString(order.OrderID()),
-		UserID:     uuidToString(order.UserID()),
-		Status:     string(order.Status()),
-		TotalPrice: order.TotalPrice(),
-		Items:      items,
-		CreatedAt:  order.CreatedAt().UTC().Format(timeRFC3339),
-		UpdatedAt:  order.UpdatedAt().UTC().Format(timeRFC3339),
+		OrderID:         uuidToString(order.OrderID()),
+		UserID:          uuidToString(order.UserID()),
+		Status:          string(order.Status()),
+		TotalPrice:      order.TotalPrice(),
+		DeliveryAddress: order.DeliveryAddress(),
+		Items:           items,
+		CreatedAt:       order.CreatedAt().UTC().Format(timeRFC3339),
+		UpdatedAt:       order.UpdatedAt().UTC().Format(timeRFC3339),
 	}
 }
 

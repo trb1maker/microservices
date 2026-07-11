@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/trb1maker/microservices/services/order-service/internal/domain"
@@ -27,14 +28,46 @@ func (r *OrderRepository) Get(_ context.Context, orderID domain.OrderID) (*domai
 		return nil, nil
 	}
 
-	return order, nil
+	return cloneOrder(order)
 }
 
 func (r *OrderRepository) Save(_ context.Context, order *domain.Order) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.orders[order.OrderID()] = order
+	cloned, err := cloneOrder(order)
+	if err != nil {
+		return err
+	}
+
+	r.orders[order.OrderID()] = cloned
 
 	return nil
+}
+
+func (r *OrderRepository) Delete(_ context.Context, orderID domain.OrderID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delete(r.orders, orderID)
+
+	return nil
+}
+
+func cloneOrder(order *domain.Order) (*domain.Order, error) {
+	cloned, err := domain.NewOrder(
+		order.OrderID(),
+		order.UserID(),
+		order.Status(),
+		order.PaymentID(),
+		order.DeliveryAddress(),
+		order.CreatedAt(),
+		order.UpdatedAt(),
+		order.Items()...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("clone order: %w", err)
+	}
+
+	return cloned, nil
 }

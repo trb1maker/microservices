@@ -228,6 +228,21 @@ func TestCart_Clear(t *testing.T) {
 	assert.True(t, cart.UpdatedAt().After(updatedAt))
 }
 
+func TestReconstituteCart(t *testing.T) {
+	t.Parallel()
+
+	userID := UserID(uuid.New())
+	item := mustOrderItem(t, ProductID(uuid.New()), 1, 100)
+	updatedAt := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	cart, err := ReconstituteCart(userID, updatedAt, item)
+	require.NoError(t, err)
+	require.NotNil(t, cart)
+	assert.Equal(t, userID, cart.UserID())
+	assert.Equal(t, updatedAt, cart.UpdatedAt())
+	assert.Equal(t, []OrderItem{item}, cart.Items())
+}
+
 func TestCart_Checkout(t *testing.T) {
 	t.Parallel()
 
@@ -242,13 +257,14 @@ func TestCart_Checkout(t *testing.T) {
 		cart, err := NewCart(userID, item)
 		require.NoError(t, err)
 
-		order, err := cart.Checkout(orderID, now)
+		order, err := cart.Checkout(orderID, "Moscow, Red Square 1", now)
 		require.NoError(t, err)
 		require.NotNil(t, order)
 		assert.Equal(t, orderID, order.OrderID())
 		assert.Equal(t, userID, order.UserID())
 		assert.Equal(t, OrderStatusPending, order.Status())
 		assert.Equal(t, PaymentID{}, order.PaymentID())
+		assert.Equal(t, "Moscow, Red Square 1", order.DeliveryAddress())
 		assert.Equal(t, int64(100), order.TotalPrice())
 		assert.Equal(t, []OrderItem{item}, order.Items())
 		assert.Equal(t, now, order.CreatedAt())
@@ -261,7 +277,7 @@ func TestCart_Checkout(t *testing.T) {
 		cart, err := NewCart(userID)
 		require.NoError(t, err)
 
-		order, err := cart.Checkout(orderID, now)
+		order, err := cart.Checkout(orderID, "Moscow", now)
 		require.ErrorIs(t, err, ErrEmptyCart)
 		assert.Nil(t, order)
 	})

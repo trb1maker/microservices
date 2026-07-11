@@ -256,6 +256,7 @@ func TestCancelOrder_confirmedForbidden(t *testing.T) {
 		order.UserID(),
 		domain.OrderStatusConfirmed,
 		domain.PaymentID(uuid.New()),
+		order.DeliveryAddress(),
 		order.CreatedAt(),
 		order.UpdatedAt(),
 		order.Items()...,
@@ -273,9 +274,195 @@ func TestCancelOrder_confirmedForbidden(t *testing.T) {
 		testServer.URL+"/orders/"+uuid.UUID(order.OrderID()).String(),
 		"",
 	)
+	req.Header.Set("X-User-ID", uuid.UUID(userID).String())
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })
 
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestGetOrder_success(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	t.Cleanup(server.Close)
+
+	userID := uuid.New().String()
+	productID := uuid.New().String()
+
+	addReq := newRequest(
+		t,
+		http.MethodPost,
+		server.URL+"/cart/items",
+		`{"product_id":"`+productID+`","quantity":1,"unit_price":100}`,
+	)
+	addReq.Header.Set("Content-Type", "application/json")
+	addReq.Header.Set("X-User-ID", userID)
+	_ = doRequest(t, addReq).Body.Close()
+
+	checkoutReq := newRequest(
+		t,
+		http.MethodPost,
+		server.URL+"/orders",
+		`{"delivery_address":"Moscow, Red Square 1"}`,
+	)
+	checkoutReq.Header.Set("Content-Type", "application/json")
+	checkoutReq.Header.Set("X-User-ID", userID)
+
+	checkoutResp := doRequest(t, checkoutReq)
+	t.Cleanup(func() { _ = checkoutResp.Body.Close() })
+	require.Equal(t, http.StatusCreated, checkoutResp.StatusCode)
+
+	var checkoutBody struct {
+		OrderID         string `json:"order_id"`
+		DeliveryAddress string `json:"delivery_address"`
+	}
+	require.NoError(t, json.NewDecoder(checkoutResp.Body).Decode(&checkoutBody))
+
+	getReq := newRequest(t, http.MethodGet, server.URL+"/orders/"+checkoutBody.OrderID, "")
+	getReq.Header.Set("X-User-ID", userID)
+
+	getResp := doRequest(t, getReq)
+	t.Cleanup(func() { _ = getResp.Body.Close() })
+	require.Equal(t, http.StatusOK, getResp.StatusCode)
+
+	var order struct {
+		DeliveryAddress string `json:"delivery_address"`
+	}
+	require.NoError(t, json.NewDecoder(getResp.Body).Decode(&order))
+	assert.Equal(t, "Moscow, Red Square 1", order.DeliveryAddress)
+}
+
+func TestGetOrder_wrongUser(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	t.Cleanup(server.Close)
+
+	ownerID := uuid.New().String()
+	otherID := uuid.New().String()
+	productID := uuid.New().String()
+
+	addReq := newRequest(
+		t,
+		http.MethodPost,
+		server.URL+"/cart/items",
+		`{"product_id":"`+productID+`","quantity":1,"unit_price":100}`,
+	)
+	addReq.Header.Set("Content-Type", "application/json")
+	addReq.Header.Set("X-User-ID", ownerID)
+	_ = doRequest(t, addReq).Body.Close()
+
+	checkoutReq := newRequest(
+		t,
+		http.MethodPost,
+		server.URL+"/orders",
+		`{"delivery_address":"Moscow"}`,
+	)
+	checkoutReq.Header.Set("Content-Type", "application/json")
+	checkoutReq.Header.Set("X-User-ID", ownerID)
+
+	checkoutResp := doRequest(t, checkoutReq)
+	t.Cleanup(func() { _ = checkoutResp.Body.Close() })
+
+	var checkoutBody struct {
+		OrderID string `json:"order_id"`
+	}
+	require.NoError(t, json.NewDecoder(checkoutResp.Body).Decode(&checkoutBody))
+
+	getReq := newRequest(t, http.MethodGet, server.URL+"/orders/"+checkoutBody.OrderID, "")
+	getReq.Header.Set("X-User-ID", otherID)
+
+	getResp := doRequest(t, getReq)
+	t.Cleanup(func() { _ = getResp.Body.Close() })
+	assert.Equal(t, http.StatusNotFound, getResp.StatusCode)
+}
+
+func TestCancelOrder_success(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	t.Cleanup(server.Close)
+
+	userID := uuid.New().String()
+	productID := uuid.New().String()
+
+	addReq := newRequest(
+		t,
+		http.MethodPost,
+		server.URL+"/cart/items",
+		`{"product_id":"`+productID+`","quantity":1,"unit_price":100}`,
+	)
+	addReq.Header.Set("Content-Type", "application/json")
+	addReq.Header.Set("X-User-ID", userID)
+	_ = doRequest(t, addReq).Body.Close()
+
+	checkoutReq := newRequest(
+		t,
+		http.MethodPost,
+		server.URL+"/orders",
+		`{"delivery_address":"Moscow"}`,
+	)
+	checkoutReq.Header.Set("Content-Type", "application/json")
+	checkoutReq.Header.Set("X-User-ID", userID)
+
+	checkoutResp := doRequest(t, checkoutReq)
+	t.Cleanup(func() { _ = checkoutResp.Body.Close() })
+
+	var checkoutBody struct {
+		OrderID string `json:"order_id"`
+	}
+	require.NoError(t, json.NewDecoder(checkoutResp.Body).Decode(&checkoutBody))
+
+	cancelReq := newRequest(
+		t,
+		http.MethodDelete,
+		server.URL+"/orders/"+checkoutBody.OrderID,
+		"",
+	)
+	cancelReq.Header.Set("X-User-ID", userID)
+
+	cancelResp := doRequest(t, cancelReq)
+	t.Cleanup(func() { _ = cancelResp.Body.Close() })
+	require.Equal(t, http.StatusOK, cancelResp.StatusCode)
+
+	var cancelled struct {
+		Status string `json:"status"`
+	}
+	require.NoError(t, json.NewDecoder(cancelResp.Body).Decode(&cancelled))
+	assert.Equal(t, string(domain.OrderStatusCancelled), cancelled.Status)
+}
+
+func TestRemoveCartItem_success(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	t.Cleanup(server.Close)
+
+	userID := uuid.New().String()
+	productID := uuid.New().String()
+
+	addReq := newRequest(
+		t,
+		http.MethodPost,
+		server.URL+"/cart/items",
+		`{"product_id":"`+productID+`","quantity":1,"unit_price":100}`,
+	)
+	addReq.Header.Set("Content-Type", "application/json")
+	addReq.Header.Set("X-User-ID", userID)
+	_ = doRequest(t, addReq).Body.Close()
+
+	removeReq := newRequest(t, http.MethodDelete, server.URL+"/cart/items/"+productID, "")
+	removeReq.Header.Set("X-User-ID", userID)
+
+	removeResp := doRequest(t, removeReq)
+	t.Cleanup(func() { _ = removeResp.Body.Close() })
+	require.Equal(t, http.StatusOK, removeResp.StatusCode)
+
+	var cart struct {
+		Items []any `json:"items"`
+	}
+	require.NoError(t, json.NewDecoder(removeResp.Body).Decode(&cart))
+	assert.Empty(t, cart.Items)
 }

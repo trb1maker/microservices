@@ -38,6 +38,22 @@ func NewCart(userID UserID, items ...OrderItem) (*Cart, error) {
 	}, nil
 }
 
+func ReconstituteCart(userID UserID, updatedAt time.Time, items ...OrderItem) (*Cart, error) {
+	if userID == (UserID{}) {
+		return nil, ErrUserIDRequired
+	}
+
+	if items == nil {
+		items = []OrderItem{}
+	}
+
+	return &Cart{
+		userID:    userID,
+		items:     items,
+		updatedAt: updatedAt,
+	}, nil
+}
+
 func (c *Cart) UserID() UserID {
 	return c.userID
 }
@@ -91,7 +107,7 @@ func (c *Cart) RemoveItem(productID ProductID) error {
 	return nil
 }
 
-func (c *Cart) Checkout(orderID OrderID, now time.Time) (*Order, error) {
+func (c *Cart) Checkout(orderID OrderID, deliveryAddress string, now time.Time) (*Order, error) {
 	if len(c.items) == 0 {
 		return nil, ErrEmptyCart
 	}
@@ -101,6 +117,7 @@ func (c *Cart) Checkout(orderID OrderID, now time.Time) (*Order, error) {
 		c.userID,
 		OrderStatusPending,
 		PaymentID{},
+		deliveryAddress,
 		now,
 		now,
 		c.items...,
