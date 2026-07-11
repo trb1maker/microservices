@@ -2,8 +2,10 @@ package http
 
 import (
 	"context"
+	"net/http"
 	"time"
 
+	"github.com/trb1maker/microservices/pkg/middleware"
 	"github.com/trb1maker/microservices/services/order-service/internal/domain"
 )
 
@@ -21,4 +23,15 @@ type OrderService interface {
 
 type ReadinessChecker interface {
 	Check(ctx context.Context) (ready bool, checks map[string]string)
+}
+
+// HTTPExporter exposes the Prometheus scrape endpoint.
+type HTTPExporter interface {
+	Handler() http.Handler
+}
+
+// HTTPMetrics exposes scrape endpoint and instruments handlers.
+type HTTPMetrics interface {
+	HTTPExporter
+	middleware.HTTPInstrumenter
 }

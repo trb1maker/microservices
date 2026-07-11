@@ -238,3 +238,18 @@ func (r *OrderRepository) Ping(ctx context.Context) error {
 
 	return nil
 }
+
+func (r *OrderRepository) CountActiveOrders(ctx context.Context) (int, error) {
+	// «Активные» заказы — все, кроме CONFIRMED и CANCELLED; логика должна совпадать с memory-репозиторием.
+	const query = `
+		SELECT COUNT(*)
+		FROM orders
+		WHERE status NOT IN ('CONFIRMED', 'CANCELLED')`
+
+	var count int
+	if err := r.pool.QueryRow(ctx, query).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count active orders: %w", err)
+	}
+
+	return count, nil
+}

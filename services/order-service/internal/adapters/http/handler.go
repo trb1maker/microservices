@@ -174,3 +174,7 @@ func (h *Handler) CancelOrder(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, toOrderResponse(order))
 }
+
+func (h *Handler) DebugError(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "intentional error for alert demo"})
+}

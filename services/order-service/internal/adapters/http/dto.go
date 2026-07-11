@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/trb1maker/microservices/services/order-service/internal/app"
@@ -24,6 +25,10 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeError(w http.ResponseWriter, err error) {
 	status, message := mapError(err)
+	if status == http.StatusInternalServerError {
+		slog.Error("unhandled request error", slog.Any("error", err))
+	}
+
 	writeJSON(w, status, errorResponse{Error: message})
 }
 
