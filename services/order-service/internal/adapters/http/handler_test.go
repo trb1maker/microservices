@@ -4,17 +4,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"order-service/internal/adapters/output/memory"
-	"order-service/internal/app"
-	"order-service/internal/domain"
 	"strings"
 	"testing"
+
+	cartmemory "github.com/trb1maker/microservices/services/order-service/internal/adapters/cart_repository/memory"
+	httpadapter "github.com/trb1maker/microservices/services/order-service/internal/adapters/http"
+	ordermemory "github.com/trb1maker/microservices/services/order-service/internal/adapters/order_repository/memory"
+	"github.com/trb1maker/microservices/services/order-service/internal/app"
+	"github.com/trb1maker/microservices/services/order-service/internal/domain"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	httpadapter "order-service/internal/adapters/input/http"
 )
 
 func newRequest(t *testing.T, method, url, body string) *http.Request {
@@ -38,13 +39,13 @@ func doRequest(t *testing.T, req *http.Request) *http.Response {
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 
-	cartRepo := memory.NewCartRepository()
-	orderRepo := memory.NewOrderRepository()
+	cartRepo := cartmemory.NewCartRepository()
+	orderRepo := ordermemory.NewOrderRepository()
 	cartService := app.NewCartService(cartRepo)
-	orderService := app.NewOrderService(cartRepo, orderRepo)
-	handler := httpadapter.NewHandler(cartService, orderService)
+	orderService := app.NewOrderService(cartRepo, orderRepo, app.NewNoopEventPublisher())
+	handler := httpadapter.NewHandler(cartService, orderService, nil)
 
-	return httptest.NewServer(httpadapter.NewServer(handler).Handler)
+	return httptest.NewServer(httpadapter.NewServer(":8080", handler).Handler)
 }
 
 func TestHealth(t *testing.T) {
@@ -235,9 +236,9 @@ func TestCheckout_emptyCart(t *testing.T) {
 func TestCancelOrder_confirmedForbidden(t *testing.T) {
 	t.Parallel()
 
-	cartRepo := memory.NewCartRepository()
-	orderRepo := memory.NewOrderRepository()
-	orderService := app.NewOrderService(cartRepo, orderRepo)
+	cartRepo := cartmemory.NewCartRepository()
+	orderRepo := ordermemory.NewOrderRepository()
+	orderService := app.NewOrderService(cartRepo, orderRepo, app.NewNoopEventPublisher())
 
 	userID := domain.UserID(uuid.New())
 	item, err := domain.NewOrderItem(domain.ProductID(uuid.New()), 1, 100)
@@ -262,8 +263,8 @@ func TestCancelOrder_confirmedForbidden(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, orderRepo.Save(t.Context(), confirmed))
 
-	handler := httpadapter.NewHandler(app.NewCartService(cartRepo), orderService)
-	testServer := httptest.NewServer(httpadapter.NewServer(handler).Handler)
+	handler := httpadapter.NewHandler(app.NewCartService(cartRepo), orderService, nil)
+	testServer := httptest.NewServer(httpadapter.NewServer(":8080", handler).Handler)
 	t.Cleanup(testServer.Close)
 
 	req := newRequest(

@@ -2,8 +2,9 @@ package memory
 
 import (
 	"context"
-	"order-service/internal/domain"
 	"sync"
+
+	"github.com/trb1maker/microservices/services/order-service/internal/domain"
 )
 
 type OrderRepository struct {

@@ -2,8 +2,9 @@ package http
 
 import (
 	"net/http"
-	"order-service/internal/app"
-	"order-service/internal/domain"
+
+	"github.com/trb1maker/microservices/services/order-service/internal/app"
+	"github.com/trb1maker/microservices/services/order-service/internal/domain"
 
 	"github.com/google/uuid"
 )
