@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	cartmemory "github.com/trb1maker/microservices/services/order-service/internal/adapters/cart_repository/memory"
 	httpadapter "github.com/trb1maker/microservices/services/order-service/internal/adapters/http"
@@ -18,6 +19,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/trb1maker/microservices/pkg/auth"
+)
+
+const (
+	testJWTSecret  = "test-secret-minimum-32-characters-long"
+	testServerAddr = ":8080"
 )
 
 func newRequest(t *testing.T, method, url, body string) *http.Request {
@@ -27,6 +34,14 @@ func newRequest(t *testing.T, method, url, body string) *http.Request {
 	require.NoError(t, err)
 
 	return req
+}
+
+func withBearer(t *testing.T, req *http.Request, userID uuid.UUID) {
+	t.Helper()
+
+	token, err := auth.IssueToken(testJWTSecret, userID, time.Hour)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+token)
 }
 
 func doRequest(t *testing.T, req *http.Request) *http.Response {
@@ -47,7 +62,10 @@ func newTestServer(t *testing.T) *httptest.Server {
 	orderService := app.NewOrderService(cartRepo, orderRepo, app.NewNoopEventPublisher(), app.NewNoopOrderMetrics())
 	handler := httpadapter.NewHandler(cartService, orderService, nil)
 
-	return httptest.NewServer(httpadapter.NewServer(":8080", handler, nil, "", "").Handler)
+	return httptest.NewServer(httpadapter.NewServer(httpadapter.ServerConfig{
+		Addr: testServerAddr,
+		Auth: &httpadapter.AuthConfig{JWTSecret: testJWTSecret},
+	}, handler, nil, nil).Handler)
 }
 
 func TestHealth(t *testing.T) {
@@ -74,7 +92,7 @@ func TestAddCartItem_and_GetCart(t *testing.T) {
 	server := newTestServer(t)
 	t.Cleanup(server.Close)
 
-	userID := uuid.New().String()
+	userID := uuid.New()
 	productID := uuid.New().String()
 
 	req := newRequest(
@@ -84,14 +102,14 @@ func TestAddCartItem_and_GetCart(t *testing.T) {
 		`{"product_id":"`+productID+`","quantity":2,"unit_price":100}`,
 	)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-User-ID", userID)
+	withBearer(t, req, userID)
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 	getReq := newRequest(t, http.MethodGet, server.URL+"/cart", "")
-	getReq.Header.Set("X-User-ID", userID)
+	withBearer(t, getReq, userID)
 
 	getResp := doRequest(t, getReq)
 	t.Cleanup(func() { _ = getResp.Body.Close() })
@@ -109,7 +127,7 @@ func TestAddCartItem_and_GetCart(t *testing.T) {
 	assert.Equal(t, int64(2), cart.Items[0].Quantity)
 }
 
-func TestAddCartItem_requiresUserID(t *testing.T) {
+func TestAddCartItem_requiresAuthorization(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t)
@@ -126,7 +144,7 @@ func TestAddCartItem_requiresUserID(t *testing.T) {
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })
 
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
 func TestAddCartItem_invalidJSON(t *testing.T) {
@@ -137,7 +155,7 @@ func TestAddCartItem_invalidJSON(t *testing.T) {
 
 	req := newRequest(t, http.MethodPost, server.URL+"/cart/items", "{")
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-User-ID", uuid.New().String())
+	withBearer(t, req, uuid.New())
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })
@@ -151,7 +169,7 @@ func TestCheckout_createsOrder(t *testing.T) {
 	server := newTestServer(t)
 	t.Cleanup(server.Close)
 
-	userID := uuid.New().String()
+	userID := uuid.New()
 	productID := uuid.New().String()
 
 	addReq := newRequest(
@@ -161,7 +179,7 @@ func TestCheckout_createsOrder(t *testing.T) {
 		`{"product_id":"`+productID+`","quantity":1,"unit_price":100}`,
 	)
 	addReq.Header.Set("Content-Type", "application/json")
-	addReq.Header.Set("X-User-ID", userID)
+	withBearer(t, addReq, userID)
 
 	addResp := doRequest(t, addReq)
 	_ = addResp.Body.Close()
@@ -174,7 +192,7 @@ func TestCheckout_createsOrder(t *testing.T) {
 		`{"delivery_address":"Moscow, Red Square 1"}`,
 	)
 	checkoutReq.Header.Set("Content-Type", "application/json")
-	checkoutReq.Header.Set("X-User-ID", userID)
+	withBearer(t, checkoutReq, userID)
 
 	checkoutResp := doRequest(t, checkoutReq)
 	t.Cleanup(func() { _ = checkoutResp.Body.Close() })
@@ -191,7 +209,7 @@ func TestCheckout_createsOrder(t *testing.T) {
 	assert.NotEmpty(t, order.OrderID)
 
 	getCartReq := newRequest(t, http.MethodGet, server.URL+"/cart", "")
-	getCartReq.Header.Set("X-User-ID", userID)
+	withBearer(t, getCartReq, userID)
 
 	getCartResp := doRequest(t, getCartReq)
 	t.Cleanup(func() { _ = getCartResp.Body.Close() })
@@ -211,7 +229,7 @@ func TestCheckout_requiresDeliveryAddress(t *testing.T) {
 
 	req := newRequest(t, http.MethodPost, server.URL+"/orders", `{"delivery_address":""}`)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-User-ID", uuid.New().String())
+	withBearer(t, req, uuid.New())
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })
@@ -227,7 +245,7 @@ func TestCheckout_emptyCart(t *testing.T) {
 
 	req := newRequest(t, http.MethodPost, server.URL+"/orders", `{"delivery_address":"Moscow"}`)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-User-ID", uuid.New().String())
+	withBearer(t, req, uuid.New())
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })
@@ -267,7 +285,7 @@ func TestCancelOrder_confirmedForbidden(t *testing.T) {
 	require.NoError(t, orderRepo.Save(t.Context(), confirmed))
 
 	handler := httpadapter.NewHandler(app.NewCartService(cartRepo), orderService, nil)
-	testServer := httptest.NewServer(httpadapter.NewServer(":8080", handler, nil, "", "").Handler)
+	testServer := httptest.NewServer(httpadapter.NewServer(httpadapter.ServerConfig{Addr: testServerAddr, Auth: &httpadapter.AuthConfig{JWTSecret: testJWTSecret}}, handler, nil, nil).Handler)
 	t.Cleanup(testServer.Close)
 
 	req := newRequest(
@@ -276,7 +294,7 @@ func TestCancelOrder_confirmedForbidden(t *testing.T) {
 		testServer.URL+"/orders/"+uuid.UUID(order.OrderID()).String(),
 		"",
 	)
-	req.Header.Set("X-User-ID", uuid.UUID(userID).String())
+	withBearer(t, req, uuid.UUID(userID))
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })
@@ -290,7 +308,7 @@ func TestGetOrder_success(t *testing.T) {
 	server := newTestServer(t)
 	t.Cleanup(server.Close)
 
-	userID := uuid.New().String()
+	userID := uuid.New()
 	productID := uuid.New().String()
 
 	addReq := newRequest(
@@ -300,7 +318,7 @@ func TestGetOrder_success(t *testing.T) {
 		`{"product_id":"`+productID+`","quantity":1,"unit_price":100}`,
 	)
 	addReq.Header.Set("Content-Type", "application/json")
-	addReq.Header.Set("X-User-ID", userID)
+	withBearer(t, addReq, userID)
 	_ = doRequest(t, addReq).Body.Close()
 
 	checkoutReq := newRequest(
@@ -310,7 +328,7 @@ func TestGetOrder_success(t *testing.T) {
 		`{"delivery_address":"Moscow, Red Square 1"}`,
 	)
 	checkoutReq.Header.Set("Content-Type", "application/json")
-	checkoutReq.Header.Set("X-User-ID", userID)
+	withBearer(t, checkoutReq, userID)
 
 	checkoutResp := doRequest(t, checkoutReq)
 	t.Cleanup(func() { _ = checkoutResp.Body.Close() })
@@ -323,7 +341,7 @@ func TestGetOrder_success(t *testing.T) {
 	require.NoError(t, json.NewDecoder(checkoutResp.Body).Decode(&checkoutBody))
 
 	getReq := newRequest(t, http.MethodGet, server.URL+"/orders/"+checkoutBody.OrderID, "")
-	getReq.Header.Set("X-User-ID", userID)
+	withBearer(t, getReq, userID)
 
 	getResp := doRequest(t, getReq)
 	t.Cleanup(func() { _ = getResp.Body.Close() })
@@ -342,8 +360,8 @@ func TestGetOrder_wrongUser(t *testing.T) {
 	server := newTestServer(t)
 	t.Cleanup(server.Close)
 
-	ownerID := uuid.New().String()
-	otherID := uuid.New().String()
+	ownerID := uuid.New()
+	otherID := uuid.New()
 	productID := uuid.New().String()
 
 	addReq := newRequest(
@@ -353,7 +371,7 @@ func TestGetOrder_wrongUser(t *testing.T) {
 		`{"product_id":"`+productID+`","quantity":1,"unit_price":100}`,
 	)
 	addReq.Header.Set("Content-Type", "application/json")
-	addReq.Header.Set("X-User-ID", ownerID)
+	withBearer(t, addReq, ownerID)
 	_ = doRequest(t, addReq).Body.Close()
 
 	checkoutReq := newRequest(
@@ -363,7 +381,7 @@ func TestGetOrder_wrongUser(t *testing.T) {
 		`{"delivery_address":"Moscow"}`,
 	)
 	checkoutReq.Header.Set("Content-Type", "application/json")
-	checkoutReq.Header.Set("X-User-ID", ownerID)
+	withBearer(t, checkoutReq, ownerID)
 
 	checkoutResp := doRequest(t, checkoutReq)
 	t.Cleanup(func() { _ = checkoutResp.Body.Close() })
@@ -374,7 +392,7 @@ func TestGetOrder_wrongUser(t *testing.T) {
 	require.NoError(t, json.NewDecoder(checkoutResp.Body).Decode(&checkoutBody))
 
 	getReq := newRequest(t, http.MethodGet, server.URL+"/orders/"+checkoutBody.OrderID, "")
-	getReq.Header.Set("X-User-ID", otherID)
+	withBearer(t, getReq, otherID)
 
 	getResp := doRequest(t, getReq)
 	t.Cleanup(func() { _ = getResp.Body.Close() })
@@ -387,7 +405,7 @@ func TestCancelOrder_success(t *testing.T) {
 	server := newTestServer(t)
 	t.Cleanup(server.Close)
 
-	userID := uuid.New().String()
+	userID := uuid.New()
 	productID := uuid.New().String()
 
 	addReq := newRequest(
@@ -397,7 +415,7 @@ func TestCancelOrder_success(t *testing.T) {
 		`{"product_id":"`+productID+`","quantity":1,"unit_price":100}`,
 	)
 	addReq.Header.Set("Content-Type", "application/json")
-	addReq.Header.Set("X-User-ID", userID)
+	withBearer(t, addReq, userID)
 	_ = doRequest(t, addReq).Body.Close()
 
 	checkoutReq := newRequest(
@@ -407,7 +425,7 @@ func TestCancelOrder_success(t *testing.T) {
 		`{"delivery_address":"Moscow"}`,
 	)
 	checkoutReq.Header.Set("Content-Type", "application/json")
-	checkoutReq.Header.Set("X-User-ID", userID)
+	withBearer(t, checkoutReq, userID)
 
 	checkoutResp := doRequest(t, checkoutReq)
 	t.Cleanup(func() { _ = checkoutResp.Body.Close() })
@@ -423,7 +441,7 @@ func TestCancelOrder_success(t *testing.T) {
 		server.URL+"/orders/"+checkoutBody.OrderID,
 		"",
 	)
-	cancelReq.Header.Set("X-User-ID", userID)
+	withBearer(t, cancelReq, userID)
 
 	cancelResp := doRequest(t, cancelReq)
 	t.Cleanup(func() { _ = cancelResp.Body.Close() })
@@ -442,7 +460,7 @@ func TestRemoveCartItem_success(t *testing.T) {
 	server := newTestServer(t)
 	t.Cleanup(server.Close)
 
-	userID := uuid.New().String()
+	userID := uuid.New()
 	productID := uuid.New().String()
 
 	addReq := newRequest(
@@ -452,11 +470,11 @@ func TestRemoveCartItem_success(t *testing.T) {
 		`{"product_id":"`+productID+`","quantity":1,"unit_price":100}`,
 	)
 	addReq.Header.Set("Content-Type", "application/json")
-	addReq.Header.Set("X-User-ID", userID)
+	withBearer(t, addReq, userID)
 	_ = doRequest(t, addReq).Body.Close()
 
 	removeReq := newRequest(t, http.MethodDelete, server.URL+"/cart/items/"+productID, "")
-	removeReq.Header.Set("X-User-ID", userID)
+	withBearer(t, removeReq, userID)
 
 	removeResp := doRequest(t, removeReq)
 	t.Cleanup(func() { _ = removeResp.Body.Close() })
@@ -484,7 +502,7 @@ func TestReady_notReady(t *testing.T) {
 	orderService := app.NewOrderService(cartRepo, orderRepo, app.NewNoopEventPublisher(), app.NewNoopOrderMetrics())
 	handler := httpadapter.NewHandler(cartService, orderService, failingReadinessChecker{})
 
-	server := httptest.NewServer(httpadapter.NewServer(":8080", handler, nil, "", "").Handler)
+	server := httptest.NewServer(httpadapter.NewServer(httpadapter.ServerConfig{Addr: testServerAddr, Auth: &httpadapter.AuthConfig{JWTSecret: testJWTSecret}}, handler, nil, nil).Handler)
 	t.Cleanup(server.Close)
 
 	resp := doRequest(t, newRequest(t, http.MethodGet, server.URL+"/ready", ""))
@@ -501,7 +519,7 @@ func TestReady_notReady(t *testing.T) {
 	assert.Equal(t, "connection refused", body.Checks["postgres"])
 }
 
-func TestAddCartItem_invalidUserID(t *testing.T) {
+func TestAddCartItem_invalidToken(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer(t)
@@ -514,12 +532,12 @@ func TestAddCartItem_invalidUserID(t *testing.T) {
 		`{"product_id":"`+uuid.New().String()+`","quantity":1,"unit_price":100}`,
 	)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-User-ID", "not-a-uuid")
+	req.Header.Set("Authorization", "Bearer invalid-token")
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })
 
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
 func TestGetOrder_invalidOrderID(t *testing.T) {
@@ -529,7 +547,7 @@ func TestGetOrder_invalidOrderID(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	req := newRequest(t, http.MethodGet, server.URL+"/orders/not-a-uuid", "")
-	req.Header.Set("X-User-ID", uuid.New().String())
+	withBearer(t, req, uuid.New())
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })
@@ -544,7 +562,7 @@ func TestRemoveCartItem_invalidProductID(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	req := newRequest(t, http.MethodDelete, server.URL+"/cart/items/not-a-uuid", "")
-	req.Header.Set("X-User-ID", uuid.New().String())
+	withBearer(t, req, uuid.New())
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })
@@ -578,11 +596,11 @@ func TestGetCart_internalError(t *testing.T) {
 		app.NewNoopOrderMetrics(),
 	)
 	handler := httpadapter.NewHandler(errorCartService{}, orderService, nil)
-	server := httptest.NewServer(httpadapter.NewServer(":8080", handler, nil, "", "").Handler)
+	server := httptest.NewServer(httpadapter.NewServer(httpadapter.ServerConfig{Addr: testServerAddr, Auth: &httpadapter.AuthConfig{JWTSecret: testJWTSecret}}, handler, nil, nil).Handler)
 	t.Cleanup(server.Close)
 
 	req := newRequest(t, http.MethodGet, server.URL+"/cart", "")
-	req.Header.Set("X-User-ID", uuid.New().String())
+	withBearer(t, req, uuid.New())
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })

@@ -8,6 +8,7 @@ import (
 	"github.com/trb1maker/microservices/services/order-service/internal/app"
 
 	"github.com/nats-io/nats.go"
+	"github.com/trb1maker/microservices/pkg/otel/natsprop"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -80,7 +81,10 @@ func (p *Publisher) publishJSON(ctx context.Context, subject string, event any) 
 		return fmt.Errorf("marshal event: %w", err)
 	}
 
-	if err := p.conn.Publish(subject, payload); err != nil {
+	msg := &nats.Msg{Subject: subject, Data: payload}
+	natsprop.Inject(ctx, msg)
+
+	if err := p.conn.PublishMsg(msg); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 

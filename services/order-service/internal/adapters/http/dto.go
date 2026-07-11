@@ -40,6 +40,8 @@ func mapError(err error) (int, string) {
 		errors.Is(err, app.ErrDeliveryAddressRequired),
 		errors.Is(err, domain.ErrNotValidOrderItem):
 		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, app.ErrUnauthorized):
+		return http.StatusUnauthorized, err.Error()
 	case errors.Is(err, domain.ErrItemNotFound),
 		errors.Is(err, app.ErrOrderNotFound):
 		return http.StatusNotFound, err.Error()
