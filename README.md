@@ -32,13 +32,14 @@ microservices/
 
 ## Документация
 
-| Документ                                        | Описание                      |
-| ----------------------------------------------- | ----------------------------- |
-| [DESIGN.md](docs/DESIGN.md)                     | Архитектура, ADR, диаграммы   |
-| [PLAN.md](docs/PLAN.md)                         | План-график спринтов          |
-| [ORDER-SERVICE.md](docs/ORDER-SERVICE.md)     | Бизнес-домен Order Service    |
-| [SPRINT1_REPORT.md](docs/SPRINT1_REPORT.md)     | Отчёт спринта 1 (CI/CD)       |
-| [SPRINT2_REPORT.md](docs/SPRINT2_REPORT.md)     | Отчёт спринта 2 (deps, integration, load test) |
+| Документ                                    | Описание                                       |
+| ------------------------------------------- | ---------------------------------------------- |
+| [DESIGN.md](docs/DESIGN.md)                 | Архитектура, ADR, диаграммы                    |
+| [PLAN.md](docs/PLAN.md)                     | План-график спринтов                           |
+| [ORDER-SERVICE.md](docs/ORDER-SERVICE.md)   | Бизнес-домен Order Service                     |
+| [SPRINT1_REPORT.md](docs/SPRINT1_REPORT.md) | Отчёт спринта 1 (CI/CD)                        |
+| [SPRINT2_REPORT.md](docs/SPRINT2_REPORT.md) | Отчёт спринта 2 (deps, integration, load test) |
+| [SPRINT3_REPORT.md](docs/SPRINT3_REPORT.md) | Отчёт спринта 3 (observability)                |
 
 ## Микросервисы
 
@@ -56,6 +57,8 @@ microservices/
 | `task test:unit`                 | юнит-тесты                                |
 | `task test:integration`          | интеграционные тесты (Docker)             |
 | `task infra:up` / `infra:down`   | PostgreSQL, Redis, NATS                   |
+| `task obs:up` / `obs:down`       | Полный стек наблюдаемости (см. ниже)      |
+| `task obs:demo`                  | Демо-трафик для метрик и алертов          |
 | `task build`                     | сборка бинарников в `bin/`                |
 | `task run SERVICE=<name>`        | запуск одного сервиса                     |
 | `task docker:build`              | dev-образы `<service>:dev`                |
@@ -65,10 +68,10 @@ microservices/
 
 ## Go-модули и workspace
 
-| Модуль | Путь в `go.mod` |
-| ------ | --------------- |
-| shared `pkg` | `github.com/trb1maker/microservices/pkg` |
-| сервис | `github.com/trb1maker/microservices/services/<name>` |
+| Модуль       | Путь в `go.mod`                                      |
+| ------------ | ---------------------------------------------------- |
+| shared `pkg` | `github.com/trb1maker/microservices/pkg`             |
+| сервис       | `github.com/trb1maker/microservices/services/<name>` |
 
 [`go.work`](go.work) подключает `pkg` и все сервисы через `use`. В `go.mod` каждого сервиса — `replace github.com/trb1maker/microservices/pkg => ../../pkg` (подмодуль не публикуется в proxy).
 
@@ -95,3 +98,26 @@ GitHub Actions: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 На каждый сервис в matrix: lint, test, build, docker (если есть `deploy/Dockerfile`), smoke `/health`. Push образа в GHCR — только на `main`: `ghcr.io/<owner>/<repo>/<service>:<sha>`.
 
 Локальная автоматизация — [`Taskfile.yml`](Taskfile.yml); CI использует явные команды в workflow.
+
+## Наблюдаемость
+
+Полный стек в [`docker-compose.yml`](docker-compose.yml): Loki, Promtail, Prometheus, Alertmanager, Jaeger, Grafana, exporters.
+
+| Сервис            | URL                                 |
+| ----------------- | ----------------------------------- |
+| order-service API | http://localhost:8080               |
+| Prometheus        | http://localhost:9090               |
+| Grafana           | http://localhost:3000 (admin/admin) |
+| Jaeger UI         | http://localhost:16686              |
+| Alertmanager      | http://localhost:9093               |
+| Loki              | http://localhost:3100               |
+
+```bash
+task obs:up      # поднять всё
+task obs:demo    # сгенерировать трафик
+task obs:down    # остановить
+```
+
+Конфиги: [`deploy/observability/`](deploy/observability/). Подробности — [SPRINT3_REPORT.md](docs/SPRINT3_REPORT.md).
+
+При локальном `task run` логи идут в stdout; для Loki запускайте `order-service` через compose (`task obs:up`).
