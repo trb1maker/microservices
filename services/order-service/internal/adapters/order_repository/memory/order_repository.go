@@ -54,6 +54,21 @@ func (r *OrderRepository) Delete(_ context.Context, orderID domain.OrderID) erro
 	return nil
 }
 
+func (r *OrderRepository) CountActiveOrders(_ context.Context) (int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	count := 0
+	for _, order := range r.orders {
+		status := order.Status()
+		if status != domain.OrderStatusConfirmed && status != domain.OrderStatusCancelled {
+			count++
+		}
+	}
+
+	return count, nil
+}
+
 func cloneOrder(order *domain.Order) (*domain.Order, error) {
 	cloned, err := domain.NewOrder(
 		order.OrderID(),

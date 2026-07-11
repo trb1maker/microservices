@@ -15,6 +15,12 @@ type Config struct {
 	LogLevel    string `env:"LOG_LEVEL" envDefault:"info"`
 	LogFormat   string `env:"LOG_FORMAT" envDefault:"json"`
 
+	ServiceName            string `env:"OTEL_SERVICE_NAME" envDefault:"order-service"`
+	OTLPEndpoint           string `env:"OTEL_EXPORTER_OTLP_ENDPOINT" envDefault:"http://localhost:4318"`
+	OTELSDKDisabled        bool   `env:"OTEL_SDK_DISABLED" envDefault:"false"`
+	MetricsPath            string `env:"METRICS_PATH" envDefault:"/metrics"`
+	ActiveOrdersRefreshSec int    `env:"ACTIVE_ORDERS_REFRESH_SEC" envDefault:"30"`
+
 	OrderCreatedSubject       string `env:"ORDER_CREATED_SUBJECT" envDefault:"orders.created"`
 	ReserveItemsSubject       string `env:"RESERVE_ITEMS_SUBJECT" envDefault:"cart.reserve_items"`
 	ConfirmOrderSubject       string `env:"CONFIRM_ORDER_SUBJECT" envDefault:"orders.confirm"`

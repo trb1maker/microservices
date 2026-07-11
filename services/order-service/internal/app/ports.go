@@ -15,6 +15,7 @@ type OrderRepository interface {
 	Get(ctx context.Context, orderID domain.OrderID) (*domain.Order, error)
 	Save(ctx context.Context, order *domain.Order) error
 	Delete(ctx context.Context, orderID domain.OrderID) error
+	CountActiveOrders(ctx context.Context) (int, error)
 }
 
 type CartEventPublisher interface {
@@ -32,4 +33,9 @@ type OrderEventPublisher interface {
 type EventPublisher interface {
 	OrderEventPublisher
 	CartEventPublisher
+}
+
+type OrderMetrics interface {
+	RecordOrderCreated()
+	SetActiveOrders(count int)
 }

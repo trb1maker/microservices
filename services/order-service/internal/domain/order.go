@@ -136,6 +136,7 @@ func (o *Order) UpdatedAt() time.Time {
 }
 
 func (o *Order) Cancel(now time.Time) error {
+	// Идемпотентность: повторный Cancel для CANCELLED — no-op; CONFIRMED отменить нельзя.
 	if o.status == OrderStatusConfirmed {
 		return ErrOrderCancellationForbidden
 	}

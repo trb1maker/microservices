@@ -8,7 +8,13 @@ import (
 	"github.com/trb1maker/microservices/services/order-service/internal/app"
 
 	"github.com/nats-io/nats.go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
+
+var tracer = otel.Tracer("order-service/nats")
 
 type Subjects struct {
 	OrderCreated       string
@@ -56,13 +62,28 @@ func (p *Publisher) IsConnected() bool {
 	return p.conn != nil && p.conn.IsConnected()
 }
 
-func (p *Publisher) publishJSON(_ context.Context, subject string, event any) error {
+func (p *Publisher) publishJSON(ctx context.Context, subject string, event any) error {
+	// Span создаётся до publish, чтобы trace_id NATS-сообщения коррелировал с HTTP-запросом.
+	_, span := tracer.Start(ctx, "nats.publish")
+	defer span.End()
+
+	span.SetAttributes(
+		semconv.MessagingSystemKey.String("nats"),
+		attribute.String("messaging.destination", subject),
+	)
+
 	payload, err := json.Marshal(event)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+
 		return fmt.Errorf("marshal event: %w", err)
 	}
 
 	if err := p.conn.Publish(subject, payload); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+
 		return fmt.Errorf("publish message: %w", err)
 	}
 
