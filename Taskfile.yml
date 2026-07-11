@@ -69,9 +69,45 @@ tasks:
     silent: true
 
   infra:up:
-    desc: Поднять инфраструктуру
+    desc: Поднять инфраструктуру (PG, Redis, NATS)
     cmds:
-      - docker compose up -d
+      - docker compose up -d postgres redis nats
+    silent: true
+
+  obs:up:
+    desc: Поднять полный стек наблюдаемости
+    cmds:
+      - docker compose up -d --build
+    silent: true
+
+  obs:down:
+    desc: Остановить стек наблюдаемости
+    cmds:
+      - docker compose down -v
+    silent: true
+
+  obs:demo:
+    desc: Нагрузочный демо-сценарий для метрик и алертов
+    cmds:
+      - |
+        echo "Generating successful traffic..."
+        USER_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+        PRODUCT_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+        echo "{\"product_id\":\"${PRODUCT_ID}\",\"quantity\":1,\"unit_price\":100}" > /tmp/cart-item.json
+        curl -s -X POST http://localhost:8080/cart/items -H 'Content-Type: application/json' -H "X-User-ID: ${USER_ID}" -d @/tmp/cart-item.json > /dev/null
+        echo '{"delivery_address":"Moscow"}' > /tmp/checkout.json
+        for i in $(seq 1 20); do
+          curl -s -X POST http://localhost:8080/orders -H 'Content-Type: application/json' -H "X-User-ID: ${USER_ID}" -d @/tmp/checkout.json > /dev/null
+        done
+        echo "Generating sustained 5xx traffic for alert demo (75s)..."
+        for _ in $(seq 1 75); do
+          for _ in 1 2 3 4 5; do
+            curl -s http://localhost:8080/debug/error > /dev/null &
+          done
+          wait
+          sleep 1
+        done
+        echo "Done. Check Grafana http://localhost:3000 and Alertmanager http://localhost:9093"
     silent: true
 
   infra:down:
