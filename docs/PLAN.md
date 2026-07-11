@@ -55,7 +55,7 @@
 
 **Задачи (обязательные):**
 
-- [ ] Написать интеграционные тесты для `order-service` с использованием `testcontainers`:
+- [x] Подключить PostgreSQL, Redis, NATS к `order-service` (goose, caarlos0/env, slog).
   - поднять PostgreSQL, NATS, Redis в тестах.
   - проверить создание заказа и публикацию события.
 - [ ] Добавить интеграционные тесты в CI (запускать автоматически при PR или по расписанию).
@@ -158,7 +158,7 @@
 
 **Задачи (обязательные):**
 
-- [ ] Написать миграции для PostgreSQL (Order, Payment, Analytics) с использованием `golang-migrate`.
+- [ ] Написать миграции для PostgreSQL (Order, Payment, Analytics) с использованием `goose`.
 - [ ] Настроить репликацию PostgreSQL (например, два контейнера: master + replica) в docker-compose.
 - [ ] Настроить репликацию MongoDB (минимум 3 узла для отказоустойчивости) в compose.
 - [ ] Подключить Redis:

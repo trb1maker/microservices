@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"order-service/internal/app"
-	"order-service/internal/domain"
+
+	"github.com/trb1maker/microservices/services/order-service/internal/app"
+	"github.com/trb1maker/microservices/services/order-service/internal/domain"
 )
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -61,6 +62,11 @@ type errorResponse struct {
 
 type healthResponse struct {
 	Status string `json:"status"`
+}
+
+type readyResponse struct {
+	Status string            `json:"status"`
+	Checks map[string]string `json:"checks"`
 }
 
 type addCartItemRequest struct {

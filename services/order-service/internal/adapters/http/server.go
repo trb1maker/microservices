@@ -7,9 +7,10 @@ import (
 
 const readHeaderTimeout = 5 * time.Second
 
-func NewServer(handler *Handler) *http.Server {
+func NewServer(addr string, handler *Handler) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handler.Health)
+	mux.HandleFunc("GET /ready", handler.Ready)
 	mux.HandleFunc("POST /cart/items", handler.AddCartItem)
 	mux.HandleFunc("GET /cart", handler.GetCart)
 	mux.HandleFunc("DELETE /cart/items/{productID}", handler.RemoveCartItem)
@@ -18,7 +19,7 @@ func NewServer(handler *Handler) *http.Server {
 	mux.HandleFunc("DELETE /orders/{id}", handler.CancelOrder)
 
 	return &http.Server{
-		Addr:              ":8080",
+		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}

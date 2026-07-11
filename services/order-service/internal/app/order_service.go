@@ -3,9 +3,10 @@ package app
 import (
 	"context"
 	"fmt"
-	"order-service/internal/domain"
 	"strings"
 	"time"
+
+	"github.com/trb1maker/microservices/services/order-service/internal/domain"
 
 	"github.com/google/uuid"
 )
@@ -13,10 +14,19 @@ import (
 type OrderService struct {
 	carts  CartRepository
 	orders OrderRepository
+	events OrderEventPublisher
 }
 
-func NewOrderService(carts CartRepository, orders OrderRepository) *OrderService {
-	return &OrderService{carts: carts, orders: orders}
+func NewOrderService(
+	carts CartRepository,
+	orders OrderRepository,
+	events OrderEventPublisher,
+) *OrderService {
+	return &OrderService{
+		carts:  carts,
+		orders: orders,
+		events: events,
+	}
 }
 
 func (s *OrderService) Checkout(
@@ -52,7 +62,23 @@ func (s *OrderService) Checkout(
 		return nil, fmt.Errorf("save cart: %w", err)
 	}
 
+	if err := s.publishOrderCreated(ctx, order); err != nil {
+		return nil, fmt.Errorf("publish order created: %w", err)
+	}
+
 	return order, nil
+}
+
+func (s *OrderService) publishOrderCreated(ctx context.Context, order *domain.Order) error {
+	if err := s.events.PublishOrderCreated(ctx, OrderCreated{
+		OrderID:    uuid.UUID(order.OrderID()).String(),
+		UserID:     uuid.UUID(order.UserID()).String(),
+		TotalPrice: order.TotalPrice(),
+	}); err != nil {
+		return fmt.Errorf("publish order created: %w", err)
+	}
+
+	return nil
 }
 
 func (s *OrderService) GetOrder(ctx context.Context, orderID domain.OrderID) (*domain.Order, error) {

@@ -3,7 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
-	"order-service/internal/domain"
+
+	"github.com/trb1maker/microservices/services/order-service/internal/domain"
 )
 
 type CartService struct {

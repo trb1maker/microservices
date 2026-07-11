@@ -3,22 +3,38 @@ package http
 import (
 	"encoding/json"
 	"net/http"
-	"order-service/internal/app"
-	"order-service/internal/domain"
 	"time"
+
+	"github.com/trb1maker/microservices/services/order-service/internal/domain"
 )
 
 type Handler struct {
-	carts  *app.CartService
-	orders *app.OrderService
+	carts     CartService
+	orders    OrderService
+	readiness ReadinessChecker
 }
 
-func NewHandler(carts *app.CartService, orders *app.OrderService) *Handler {
-	return &Handler{carts: carts, orders: orders}
+func NewHandler(carts CartService, orders OrderService, readiness ReadinessChecker) *Handler {
+	return &Handler{carts: carts, orders: orders, readiness: readiness}
 }
 
 func (h *Handler) Health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, healthResponse{Status: "ok"})
+}
+
+func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
+	if h.readiness == nil {
+		writeJSON(w, http.StatusOK, readyResponse{Status: "ready", Checks: map[string]string{}})
+		return
+	}
+
+	ready, checks := h.readiness.Check(r.Context())
+	if !ready {
+		writeJSON(w, http.StatusServiceUnavailable, readyResponse{Status: "not_ready", Checks: checks})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, readyResponse{Status: "ready", Checks: checks})
 }
 
 func (h *Handler) AddCartItem(w http.ResponseWriter, r *http.Request) {
