@@ -23,6 +23,7 @@ import (
 	natsadapter "github.com/trb1maker/microservices/services/order-service/internal/adapters/event_publisher/nats"
 	httpadapter "github.com/trb1maker/microservices/services/order-service/internal/adapters/http"
 	orderpostgres "github.com/trb1maker/microservices/services/order-service/internal/adapters/order_repository/postgres"
+	userpostgres "github.com/trb1maker/microservices/services/order-service/internal/adapters/user_repository/postgres"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -43,6 +44,7 @@ const (
 	orderCancelledSubject     = "orders.cancelled"
 	releaseReservationSubject = "cart.release_reservation"
 	startupTimeout            = 2 * time.Minute
+	testJWTSecret             = "integration-test-secret-minimum-32-characters"
 )
 
 type testEnv struct {
@@ -53,6 +55,8 @@ type testEnv struct {
 	pgContainer    testcontainers.Container
 	redisContainer testcontainers.Container
 	natsContainer  testcontainers.Container
+	token          string
+	userID         string
 }
 
 func TestMain(m *testing.M) {
@@ -116,6 +120,8 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	orderRepo := orderpostgres.NewOrderRepository(pool)
 	cartRepo := cartredis.NewCartRepository(redisClient)
+	userRepo := userpostgres.NewUserRepository(pool)
+	authService := app.NewAuthService(userRepo, testJWTSecret, time.Hour)
 	events := natsadapter.NewPublisher(natsConn, natsadapter.Subjects{
 		OrderCreated:       orderCreatedSubject,
 		ReserveItems:       "cart.reserve_items",
@@ -139,10 +145,13 @@ func newTestEnv(t *testing.T) *testEnv {
 	cartService := app.NewCartService(cartRepo)
 	orderService := app.NewOrderService(cartRepo, orderRepo, events, app.NewNoopOrderMetrics())
 	handler := httpadapter.NewHandler(cartService, orderService, health.NewChecker(checks))
-	server := httptest.NewServer(httpadapter.NewServer(":8080", handler, nil, "", "").Handler)
+	server := httptest.NewServer(httpadapter.NewServer(httpadapter.ServerConfig{
+		Addr: ":8080",
+		Auth: &httpadapter.AuthConfig{JWTSecret: testJWTSecret},
+	}, handler, httpadapter.NewAppAuthAdapter(authService), nil).Handler)
 	t.Cleanup(server.Close)
 
-	return &testEnv{
+	env := &testEnv{
 		server:         server,
 		pool:           pool,
 		redis:          redisClient,
@@ -150,7 +159,31 @@ func newTestEnv(t *testing.T) *testEnv {
 		pgContainer:    pgContainer,
 		redisContainer: redisContainer,
 		natsContainer:  natsContainer,
+		userID:         "11111111-1111-4111-8111-111111111111",
 	}
+
+	env.token = env.login(t, "demo@example.com", "demo123")
+	return env
+}
+
+func (env *testEnv) login(t *testing.T, email, password string) string {
+	t.Helper()
+
+	resp := env.doJSON(t, http.MethodPost, "/auth/login", "", fmt.Sprintf(
+		`{"email":"%s","password":"%s"}`,
+		email,
+		password,
+	))
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body struct {
+		AccessToken string `json:"access_token"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	require.NotEmpty(t, body.AccessToken)
+
+	return body.AccessToken
 }
 
 func TestIntegration_Ready(t *testing.T) {
@@ -176,7 +209,6 @@ func TestIntegration_Ready(t *testing.T) {
 func TestIntegration_CheckoutHappyPath(t *testing.T) {
 	env := newTestEnv(t)
 
-	userID := uuid.New().String()
 	productID := uuid.New().String()
 
 	eventCh := make(chan []byte, 1)
@@ -191,14 +223,14 @@ func TestIntegration_CheckoutHappyPath(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sub.Unsubscribe() })
 
-	addResp := env.doJSON(t, http.MethodPost, "/cart/items", userID, fmt.Sprintf(
+	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
 		productID,
 	))
 	require.Equal(t, http.StatusCreated, addResp.StatusCode)
 	_ = addResp.Body.Close()
 
-	checkoutResp := env.doJSON(t, http.MethodPost, "/orders", userID, `{"delivery_address":"Moscow"}`)
+	checkoutResp := env.doJSON(t, http.MethodPost, "/orders", env.token, `{"delivery_address":"Moscow"}`)
 	t.Cleanup(func() { _ = checkoutResp.Body.Close() })
 	require.Equal(t, http.StatusCreated, checkoutResp.StatusCode)
 
@@ -211,7 +243,7 @@ func TestIntegration_CheckoutHappyPath(t *testing.T) {
 	assert.Equal(t, "PENDING", order.Status)
 	assert.Equal(t, int64(100), order.TotalPrice)
 
-	cartKey := "cart:" + userID
+	cartKey := "cart:" + env.userID
 	exists, err := env.redis.Exists(context.Background(), cartKey).Result()
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), exists)
@@ -233,13 +265,13 @@ func TestIntegration_CheckoutHappyPath(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(payload, &event))
 		assert.Equal(t, order.OrderID, event.OrderID)
-		assert.Equal(t, userID, event.UserID)
+		assert.Equal(t, env.userID, event.UserID)
 		assert.Equal(t, int64(100), event.TotalPrice)
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for ORDER_CREATED event")
 	}
 
-	getCartResp := env.doJSON(t, http.MethodGet, "/cart", userID, "")
+	getCartResp := env.doJSON(t, http.MethodGet, "/cart", env.token, "")
 	t.Cleanup(func() { _ = getCartResp.Body.Close() })
 	require.Equal(t, http.StatusOK, getCartResp.StatusCode)
 
@@ -249,15 +281,13 @@ func TestIntegration_CheckoutHappyPath(t *testing.T) {
 	require.NoError(t, json.NewDecoder(getCartResp.Body).Decode(&cart))
 	assert.Empty(t, cart.Items)
 
-	getOrderResp := env.doJSON(t, http.MethodGet, "/orders/"+order.OrderID, userID, "")
+	getOrderResp := env.doJSON(t, http.MethodGet, "/orders/"+order.OrderID, env.token, "")
 	t.Cleanup(func() { _ = getOrderResp.Body.Close() })
 	require.Equal(t, http.StatusOK, getOrderResp.StatusCode)
 }
 
 func TestIntegration_CheckoutEmptyCart(t *testing.T) {
 	env := newTestEnv(t)
-
-	userID := uuid.New().String()
 
 	eventCh := make(chan struct{}, 1)
 	sub, err := env.natsConn.Subscribe(orderCreatedSubject, func(_ *natspkg.Msg) {
@@ -269,7 +299,7 @@ func TestIntegration_CheckoutEmptyCart(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sub.Unsubscribe() })
 
-	resp := env.doJSON(t, http.MethodPost, "/orders", userID, `{"delivery_address":"Moscow"}`)
+	resp := env.doJSON(t, http.MethodPost, "/orders", env.token, `{"delivery_address":"Moscow"}`)
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 
@@ -283,7 +313,6 @@ func TestIntegration_CheckoutEmptyCart(t *testing.T) {
 func TestIntegration_CancelOrder(t *testing.T) {
 	env := newTestEnv(t)
 
-	userID := uuid.New().String()
 	productID := uuid.New().String()
 
 	cancelledCh := make(chan []byte, 1)
@@ -307,14 +336,14 @@ func TestIntegration_CancelOrder(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = releaseSub.Unsubscribe() })
 
-	addResp := env.doJSON(t, http.MethodPost, "/cart/items", userID, fmt.Sprintf(
+	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
 		productID,
 	))
 	require.Equal(t, http.StatusCreated, addResp.StatusCode)
 	_ = addResp.Body.Close()
 
-	checkoutResp := env.doJSON(t, http.MethodPost, "/orders", userID, `{"delivery_address":"Moscow"}`)
+	checkoutResp := env.doJSON(t, http.MethodPost, "/orders", env.token, `{"delivery_address":"Moscow"}`)
 	t.Cleanup(func() { _ = checkoutResp.Body.Close() })
 	require.Equal(t, http.StatusCreated, checkoutResp.StatusCode)
 
@@ -323,7 +352,7 @@ func TestIntegration_CancelOrder(t *testing.T) {
 	}
 	require.NoError(t, json.NewDecoder(checkoutResp.Body).Decode(&order))
 
-	cancelResp := env.doJSON(t, http.MethodDelete, "/orders/"+order.OrderID, userID, "")
+	cancelResp := env.doJSON(t, http.MethodDelete, "/orders/"+order.OrderID, env.token, "")
 	t.Cleanup(func() { _ = cancelResp.Body.Close() })
 	require.Equal(t, http.StatusOK, cancelResp.StatusCode)
 
@@ -341,7 +370,7 @@ func TestIntegration_CancelOrder(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(payload, &event))
 		assert.Equal(t, order.OrderID, event.OrderID)
-		assert.Equal(t, userID, event.UserID)
+		assert.Equal(t, env.userID, event.UserID)
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for ORDER_CANCELLED event")
 	}
@@ -354,7 +383,7 @@ func TestIntegration_CancelOrder(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(payload, &event))
 		assert.Equal(t, order.OrderID, event.OrderID)
-		assert.Equal(t, userID, event.UserID)
+		assert.Equal(t, env.userID, event.UserID)
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for RELEASE_RESERVATION event")
 	}
@@ -363,18 +392,17 @@ func TestIntegration_CancelOrder(t *testing.T) {
 func TestIntegration_GetOrder_wrongUser(t *testing.T) {
 	env := newTestEnv(t)
 
-	ownerID := uuid.New().String()
-	otherID := uuid.New().String()
+	otherToken := env.login(t, "admin@example.com", "admin123")
 	productID := uuid.New().String()
 
-	addResp := env.doJSON(t, http.MethodPost, "/cart/items", ownerID, fmt.Sprintf(
+	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
 		productID,
 	))
 	require.Equal(t, http.StatusCreated, addResp.StatusCode)
 	_ = addResp.Body.Close()
 
-	checkoutResp := env.doJSON(t, http.MethodPost, "/orders", ownerID, `{"delivery_address":"Moscow"}`)
+	checkoutResp := env.doJSON(t, http.MethodPost, "/orders", env.token, `{"delivery_address":"Moscow"}`)
 	t.Cleanup(func() { _ = checkoutResp.Body.Close() })
 	require.Equal(t, http.StatusCreated, checkoutResp.StatusCode)
 
@@ -383,7 +411,7 @@ func TestIntegration_GetOrder_wrongUser(t *testing.T) {
 	}
 	require.NoError(t, json.NewDecoder(checkoutResp.Body).Decode(&order))
 
-	getResp := env.doJSON(t, http.MethodGet, "/orders/"+order.OrderID, otherID, "")
+	getResp := env.doJSON(t, http.MethodGet, "/orders/"+order.OrderID, otherToken, "")
 	t.Cleanup(func() { _ = getResp.Body.Close() })
 	assert.Equal(t, http.StatusNotFound, getResp.StatusCode)
 }
@@ -391,10 +419,9 @@ func TestIntegration_GetOrder_wrongUser(t *testing.T) {
 func TestIntegration_CartUpdatedAtRoundTrip(t *testing.T) {
 	env := newTestEnv(t)
 
-	userID := uuid.New().String()
 	productID := uuid.New().String()
 
-	addResp := env.doJSON(t, http.MethodPost, "/cart/items", userID, fmt.Sprintf(
+	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
 		productID,
 	))
@@ -406,7 +433,7 @@ func TestIntegration_CartUpdatedAtRoundTrip(t *testing.T) {
 	require.NoError(t, json.NewDecoder(addResp.Body).Decode(&addBody))
 	_ = addResp.Body.Close()
 
-	getResp := env.doJSON(t, http.MethodGet, "/cart", userID, "")
+	getResp := env.doJSON(t, http.MethodGet, "/cart", env.token, "")
 	t.Cleanup(func() { _ = getResp.Body.Close() })
 	require.Equal(t, http.StatusOK, getResp.StatusCode)
 
@@ -417,7 +444,7 @@ func TestIntegration_CartUpdatedAtRoundTrip(t *testing.T) {
 	assert.Equal(t, addBody.UpdatedAt, cart.UpdatedAt)
 }
 
-func (env *testEnv) doJSON(t *testing.T, method, path, userID, body string) *http.Response {
+func (env *testEnv) doJSON(t *testing.T, method, path, token, body string) *http.Response {
 	t.Helper()
 
 	var reader io.Reader
@@ -432,8 +459,8 @@ func (env *testEnv) doJSON(t *testing.T, method, path, userID, body string) *htt
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	if userID != "" {
-		req.Header.Set("X-User-ID", userID)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
