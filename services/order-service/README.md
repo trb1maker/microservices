@@ -1,6 +1,6 @@
 # order-service
 
-Центральный сервис платформы: корзина, заказы, оркестрация Saga (Choreography). BFF для фронтенда (REST), взаимодействие с Inventory и Payment через NATS и gRPC.
+Центральный сервис платформы: корзина, заказы, оркестрация Saga (Choreography). BFF для фронтенда (REST), взаимодействие с Store и Payment через NATS и gRPC.
 
 Домен и сценарии: [docs/OREDER-SERVICE.md](../../docs/OREDER-SERVICE.md)
 

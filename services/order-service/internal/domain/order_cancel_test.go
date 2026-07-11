@@ -1,9 +1,10 @@
 package domain_test
 
 import (
-	"order-service/internal/domain"
 	"testing"
 	"time"
+
+	"github.com/trb1maker/microservices/services/order-service/internal/domain"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"

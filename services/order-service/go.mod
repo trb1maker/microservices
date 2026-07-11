@@ -1,4 +1,4 @@
-module order-service
+module github.com/trb1maker/microservices/services/order-service
 
 go 1.26.4
 
@@ -12,3 +12,5 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/trb1maker/microservices/pkg => ../../pkg

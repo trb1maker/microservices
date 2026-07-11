@@ -1,6 +1,6 @@
 # Бизнес-описание домена «Order Service»
 
-Документ описывает бизнес-сущности, правила и сценарии Order Service в рамках [архитектуры проекта](DESIGN.md). Фокус — Saga (Choreography), жизненный цикл заказа и взаимодействие с Inventory и Payment.
+Документ описывает бизнес-сущности, правила и сценарии Order Service в рамках [архитектуры проекта](DESIGN.md). Фокус — Saga (Choreography), жизненный цикл заказа и взаимодействие с Store и Payment.
 
 ---
 
@@ -18,7 +18,7 @@
 **Правила:**
 - Количество каждого товара — целое число ≥ 1.
 - Цена за единицу > 0.
-- При добавлении товара Order Service публикует событие `RESERVE_ITEMS` в NATS (Inventory резервирует остаток асинхронно).
+- При добавлении товара Order Service публикует событие `RESERVE_ITEMS` в NATS (Store резервирует остаток асинхронно).
 - После подтверждения резерва (`ITEMS_RESERVED`) корзина считается готовой к оформлению.
 - Оформление заказа возможно только из непустой корзины с подтверждённым резервом.
 
@@ -88,7 +88,7 @@ PAID → CANCELLED   (компенсация: Refund + Release)
 Товар в составе корзины или заказа.
 
 **Атрибуты:**
-- Идентификатор товара (ссылка на каталог Inventory)
+- Идентификатор товара (ссылка на каталог Store)
 - Количество
 - Цена за единицу
 - Общая стоимость позиции (количество × цена)
@@ -108,7 +108,7 @@ PAID → CANCELLED   (компенсация: Refund + Release)
 2. Order Service валидирует количество и цену.
 3. Позиция добавляется в корзину (merge, если товар уже есть).
 4. Order Service публикует `RESERVE_ITEMS`.
-5. Inventory резервирует товар и публикует `ITEMS_RESERVED`.
+5. Store резервирует товар и публикует `ITEMS_RESERVED`.
 6. Order Service обновляет состояние корзины.
 
 **Ошибки:** недопустимое количество; резерв не удался — сообщение пользователю, позиция не добавляется (или удаляется из корзины).
@@ -138,7 +138,7 @@ PAID → CANCELLED   (компенсация: Refund + Release)
 2. Order Service **синхронно** вызывает Payment Service (gRPC `Charge`).
 3. При успехе: статус → `PAID`, сохраняется `payment_id`.
 4. Order Service публикует `CONFIRM_ORDER`.
-5. Inventory списывает товар и публикует `ORDER_CONFIRMED`.
+5. Store списывает товар и публикует `ORDER_CONFIRMED`.
 6. Order Service переводит заказ в `CONFIRMED` и публикует `ORDER_FINALIZED`.
 
 **Ошибки:** отказ платежа — заказ остаётся `RESERVED`, пользователь может повторить; таймаут gRPC — ошибка без смены статуса.
@@ -150,7 +150,7 @@ PAID → CANCELLED   (компенсация: Refund + Release)
 **Предусловия:** заказ в статусе `PAID`, отправлено `CONFIRM_ORDER`.
 
 **Поток (сценарий B из DESIGN):**
-1. Inventory не может списать товар и публикует `RESERVATION_FAILED`.
+1. Store не может списать товар и публикует `RESERVATION_FAILED`.
 2. Order Service **синхронно** вызывает Payment Service (gRPC `Refund`).
 3. Статус → `CANCELLED`.
 4. Order Service публикует `ORDER_CANCELLED` (Notification, Analytics).
@@ -211,7 +211,7 @@ PAID → CANCELLED   (компенсация: Refund + Release)
 
 Следующее сознательно не описывается здесь — ответственность других сервисов или инфраструктуры:
 
-- Каталог товаров, атрибуты (размер, цвет) — Inventory Service (MongoDB).
+- Каталог товаров, атрибуты (размер, цвет) — Store Service (MongoDB).
 - Детали платёжных транзакций — Payment Service (PostgreSQL).
 - Уведомления пользователю — Notification Service.
 - Чеки и витрины — Analytics Service (MinIO, PostgreSQL).

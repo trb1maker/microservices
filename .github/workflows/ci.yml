@@ -48,7 +48,11 @@ jobs:
           while IFS= read -r file; do
             [ -z "$file" ] && continue
             case "$file" in
-              .golangci.yaml|go.work|go.work.sum|Taskfile.yml)
+              .golangci.yaml|go.work|go.work.sum|Taskfile.yml|docker-compose.yml)
+                shared_changed=true
+                break
+                ;;
+              pkg/*)
                 shared_changed=true
                 break
                 ;;
@@ -95,6 +99,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: |
+            pkg/go.sum
             services/${{ matrix.service }}/go.sum
             go.work.sum
 
@@ -102,10 +107,16 @@ jobs:
         uses: golangci/golangci-lint-action@v8
         with:
           version: latest
-          args: --config .golangci.yaml ./services/${{ matrix.service }}/...
+          args: --config .golangci.yaml ./pkg/... ./services/${{ matrix.service }}/...
 
       - name: Unit tests
         run: go test -race ./services/${{ matrix.service }}/...
+
+      - name: Integration tests
+        run: |
+          if [ -d "services/${{ matrix.service }}/internal/integration" ]; then
+            go test -tags=integration -timeout 10m ./services/${{ matrix.service }}/internal/integration/...
+          fi
 
       - name: Build binary
         run: go build -o bin/${{ matrix.service }} ./services/${{ matrix.service }}/cmd/main.go
@@ -119,10 +130,10 @@ jobs:
             exit 0
           fi
 
-          docker build -f "$dockerfile" -t ${{ matrix.service }}:ci services/${{ matrix.service }}
+          docker build -f "$dockerfile" -t ${{ matrix.service }}:ci .
 
           container_name="${{ matrix.service }}-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          docker run -d --name "$container_name" -p 8080:8080 ${{ matrix.service }}:ci
+          docker run -d --name "$container_name" -e USE_MEMORY=true -p 8080:8080 ${{ matrix.service }}:ci
 
           for _ in $(seq 1 10); do
             if curl -fsS http://localhost:8080/health; then
