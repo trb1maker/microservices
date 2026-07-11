@@ -14,7 +14,7 @@ import (
 func TestInstrument_IncrementsCounter(t *testing.T) {
 	t.Parallel()
 
-	m := New()
+	m := New("/metrics")
 	handler := m.Instrument(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 	}))

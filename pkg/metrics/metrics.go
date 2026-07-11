@@ -16,6 +16,8 @@ const namespace = "order_service"
 type Metrics struct {
 	registry *prometheus.Registry
 
+	metricsPath string
+
 	HTTPRequestsTotal    *prometheus.CounterVec
 	HTTPRequestDuration  *prometheus.HistogramVec
 	HTTPRequestsInFlight prometheus.Gauge
@@ -23,11 +25,16 @@ type Metrics struct {
 	OrdersActive         prometheus.Gauge
 }
 
-func New() *Metrics {
+func New(metricsPath string) *Metrics {
+	if metricsPath == "" {
+		metricsPath = "/metrics"
+	}
+
 	registry := prometheus.NewRegistry()
 
 	m := &Metrics{
-		registry: registry,
+		registry:    registry,
+		metricsPath: metricsPath,
 		HTTPRequestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "http_requests_total",
@@ -73,14 +80,14 @@ func (m *Metrics) Handler() http.Handler {
 
 func (m *Metrics) Instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if httpx.ShouldSkipObservability(r.URL.Path) {
+		if r.URL.Path == m.metricsPath {
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		route := r.Pattern
 		if route == "" {
-			route = r.URL.Path
+			route = "unknown"
 		}
 
 		m.HTTPRequestsInFlight.Inc()

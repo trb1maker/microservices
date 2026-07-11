@@ -20,13 +20,13 @@ import (
 func TestChain_SkipsMetricsPath(t *testing.T) {
 	t.Parallel()
 
-	m := metrics.New()
+	m := metrics.New("/metrics")
 	called := false
 
 	handler := Chain(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
-	}), "test-service", m, nil)
+	}), "test-service", m, nil, "/metrics")
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
@@ -39,11 +39,11 @@ func TestChain_SkipsMetricsPath(t *testing.T) {
 func TestChain_InstrumentsRegularRequest(t *testing.T) {
 	t.Parallel()
 
-	m := metrics.New()
+	m := metrics.New("/metrics")
 
 	handler := Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}), "test-service", m, nil)
+	}), "test-service", m, nil, "/metrics")
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil)
 	req.Pattern = "GET /health"
@@ -66,10 +66,10 @@ func TestChain_AccessLogIncludesTraceID(t *testing.T) {
 	otel.SetTracerProvider(tp)
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 
-	m := metrics.New()
+	m := metrics.New("/metrics")
 	handler := Chain(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}), "test-service", m, nil)
+	}), "test-service", m, nil, "/metrics")
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/orders", nil)
 	req.Pattern = "POST /orders"
