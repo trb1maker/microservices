@@ -16,8 +16,12 @@ scrape_configs:
       - targets: ['localhost:9090']
 
   - job_name: order-service
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
     static_configs:
       - targets: ['order-service:8080']
+    # Must match METRICS_PATH env in order-service (default: /metrics).
     metrics_path: /metrics
 
   - job_name: postgres
