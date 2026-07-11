@@ -1,27 +1,11 @@
 package http
 
 import (
-	"net/http"
-
 	"github.com/trb1maker/microservices/services/order-service/internal/app"
 	"github.com/trb1maker/microservices/services/order-service/internal/domain"
 
 	"github.com/google/uuid"
 )
-
-func parseUserID(r *http.Request) (domain.UserID, error) {
-	raw := r.Header.Get("X-User-ID")
-	if raw == "" {
-		return domain.UserID{}, app.ErrInvalidUserID
-	}
-
-	id, err := uuid.Parse(raw)
-	if err != nil {
-		return domain.UserID{}, app.ErrInvalidUserID
-	}
-
-	return domain.UserID(id), nil
-}
 
 func parseProductID(raw string) (domain.ProductID, error) {
 	if raw == "" {

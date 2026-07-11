@@ -17,5 +17,10 @@ FROM scratch
 EXPOSE 8080
 
 COPY --from=builder /src/services/order-service/order-service /order-service
+COPY deploy/certs/order-service/server.crt /certs/server.crt
+COPY deploy/certs/order-service/server.key /certs/server.key
+COPY deploy/certs/ca/ca.crt /certs/ca.crt
+COPY deploy/certs/order-service/client.crt /certs/client.crt
+COPY deploy/certs/order-service/client.key /certs/client.key
 
 ENTRYPOINT ["/order-service"]

@@ -38,7 +38,7 @@ func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) AddCartItem(w http.ResponseWriter, r *http.Request) {
-	userID, err := parseUserID(r)
+	userID, err := userIDFromRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -72,7 +72,7 @@ func (h *Handler) AddCartItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetCart(w http.ResponseWriter, r *http.Request) {
-	userID, err := parseUserID(r)
+	userID, err := userIDFromRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -88,7 +88,7 @@ func (h *Handler) GetCart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) RemoveCartItem(w http.ResponseWriter, r *http.Request) {
-	userID, err := parseUserID(r)
+	userID, err := userIDFromRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -110,7 +110,7 @@ func (h *Handler) RemoveCartItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
-	userID, err := parseUserID(r)
+	userID, err := userIDFromRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -132,7 +132,7 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
-	userID, err := parseUserID(r)
+	caller, err := callerFromRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -144,7 +144,12 @@ func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	order, err := h.orders.GetOrder(r.Context(), userID, orderID)
+	var order *domain.Order
+	if caller.isService {
+		order, err = h.orders.GetOrderForService(r.Context(), orderID)
+	} else {
+		order, err = h.orders.GetOrder(r.Context(), caller.userID, orderID)
+	}
 	if err != nil {
 		writeError(w, err)
 		return
@@ -154,7 +159,7 @@ func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) CancelOrder(w http.ResponseWriter, r *http.Request) {
-	userID, err := parseUserID(r)
+	userID, err := userIDFromRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return

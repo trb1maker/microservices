@@ -4,8 +4,6 @@ import (
 	"errors"
 	"slices"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 var (
@@ -13,8 +11,6 @@ var (
 	ErrEmptyCart      = errors.New("cart is empty")
 	ErrItemNotFound   = errors.New("item not found in cart")
 )
-
-type UserID uuid.UUID
 
 type Cart struct {
 	userID    UserID
