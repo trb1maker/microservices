@@ -6,8 +6,14 @@ vars:
   SERVICES:
     - order-service
   DOCKER_TAG: dev
+  COMPOSE_ENV_FILE: .env
 
 tasks:
+  ensure:env:
+    desc: Создать .env из .env.example, если отсутствует
+    cmds:
+      - test -f {{.COMPOSE_ENV_FILE}} || cp .env.example {{.COMPOSE_ENV_FILE}}
+    silent: true
   fmt:
     desc: Форматирование кода
     cmds:
@@ -55,6 +61,7 @@ tasks:
 
   docker:build:
     desc: Сборка dev-образов
+    deps: [certs:generate]
     cmds:
       - for: { var: SERVICES }
         cmd: docker build -f services/{{.ITEM}}/deploy/Dockerfile -t {{.ITEM}}:{{.DOCKER_TAG}} .
@@ -65,53 +72,61 @@ tasks:
     requires:
       vars: [SERVICE]
     cmds:
-      - docker run --rm -p 8080:8080 -e USE_MEMORY=true {{.SERVICE}}:{{.DOCKER_TAG}}
+      - docker run --rm -p 8080:8080
+        -e USE_MEMORY=true
+        -e JWT_SECRET=dev-jwt-secret-minimum-32-characters-long
+        -e TLS_CERT_FILE=/certs/server.crt
+        -e TLS_KEY_FILE=/certs/server.key
+        -e TLS_CLIENT_CA_FILE=/certs/ca.crt
+        {{.SERVICE}}:{{.DOCKER_TAG}}
+    silent: true
+
+  certs:generate:
+    desc: Generate dev TLS/mTLS certificates
+    cmds:
+      - bash scripts/certs/generate.sh
+    silent: true
+
+  jwt:mint:
+    desc: Mint JWT for user UUID (task jwt:mint USER_ID=<uuid>)
+    requires:
+      vars: [USER_ID]
+    env:
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-minimum-32-characters-long}
+    cmds:
+      - go run ./scripts/jwt/mint.go {{.USER_ID}}
     silent: true
 
   infra:up:
     desc: Поднять инфраструктуру (PG, Redis, NATS)
+    deps: [certs:generate, ensure:env]
     cmds:
-      - docker compose up -d postgres redis nats
+      - docker compose --env-file {{.COMPOSE_ENV_FILE}} up -d postgres redis nats
     silent: true
 
   obs:up:
     desc: Поднять полный стек наблюдаемости
+    deps: [certs:generate, ensure:env]
     cmds:
-      - docker compose up -d --build
+      - docker compose --env-file {{.COMPOSE_ENV_FILE}} up -d --build
     silent: true
 
   obs:down:
     desc: Остановить стек наблюдаемости
+    deps: [ensure:env]
     cmds:
-      - docker compose down -v
+      - docker compose --env-file {{.COMPOSE_ENV_FILE}} down -v
     silent: true
 
   obs:demo:
     desc: Нагрузочный демо-сценарий для метрик и алертов
     cmds:
-      - |
-        echo "Generating successful traffic..."
-        USER_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
-        PRODUCT_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
-        echo "{\"product_id\":\"${PRODUCT_ID}\",\"quantity\":1,\"unit_price\":100}" > /tmp/cart-item.json
-        curl -s -X POST http://localhost:8080/cart/items -H 'Content-Type: application/json' -H "X-User-ID: ${USER_ID}" -d @/tmp/cart-item.json > /dev/null
-        echo '{"delivery_address":"Moscow"}' > /tmp/checkout.json
-        for i in $(seq 1 20); do
-          curl -s -X POST http://localhost:8080/orders -H 'Content-Type: application/json' -H "X-User-ID: ${USER_ID}" -d @/tmp/checkout.json > /dev/null
-        done
-        echo "Generating sustained 5xx traffic for alert demo (75s)..."
-        for _ in $(seq 1 75); do
-          for _ in 1 2 3 4 5; do
-            curl -s http://localhost:8080/debug/error > /dev/null &
-          done
-          wait
-          sleep 1
-        done
-        echo "Done. Check Grafana http://localhost:3000 and Alertmanager http://localhost:9093"
+      - bash scripts/obs/demo.sh
     silent: true
 
   infra:down:
     desc: Остановить инфраструктуру
+    deps: [ensure:env]
     cmds:
-      - docker compose down -v
+      - docker compose --env-file {{.COMPOSE_ENV_FILE}} down -v
     silent: true

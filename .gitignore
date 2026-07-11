@@ -3,3 +3,5 @@ bin/
 **/.env
 docs/load_results/
 .DS_Store
+deploy/certs/*
+!deploy/certs/.gitkeep

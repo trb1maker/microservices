@@ -132,13 +132,20 @@ jobs:
             exit 0
           fi
 
+          bash scripts/certs/generate.sh
           docker build -f "$dockerfile" -t ${{ matrix.service }}:ci .
 
           container_name="${{ matrix.service }}-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          docker run -d --name "$container_name" -e USE_MEMORY=true -p 8080:8080 ${{ matrix.service }}:ci
+          docker run -d --name "$container_name" \
+            -e USE_MEMORY=true \
+            -e JWT_SECRET=ci-jwt-secret-minimum-32-characters-long \
+            -e TLS_CERT_FILE=/certs/server.crt \
+            -e TLS_KEY_FILE=/certs/server.key \
+            -e TLS_CLIENT_CA_FILE=/certs/ca.crt \
+            -p 8080:8080 ${{ matrix.service }}:ci
 
           for _ in $(seq 1 10); do
-            if curl -fsS http://localhost:8080/health; then
+            if curl -kfsS https://localhost:8080/health; then
               docker rm -f "$container_name"
               echo "has_image=true" >> "$GITHUB_OUTPUT"
               exit 0
