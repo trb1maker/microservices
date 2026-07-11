@@ -40,6 +40,7 @@ microservices/
 | [SPRINT1_REPORT.md](docs/SPRINT1_REPORT.md) | Отчёт спринта 1 (CI/CD)                        |
 | [SPRINT2_REPORT.md](docs/SPRINT2_REPORT.md) | Отчёт спринта 2 (deps, integration, load test) |
 | [SPRINT3_REPORT.md](docs/SPRINT3_REPORT.md) | Отчёт спринта 3 (observability)                |
+| [SPRINT4_REPORT.md](docs/SPRINT4_REPORT.md) | Отчёт спринта 4 (JWT, TLS, mTLS)               |
 
 ## Микросервисы
 
@@ -56,7 +57,9 @@ microservices/
 | `task lint`                      | golangci-lint (все сервисы из `SERVICES`) |
 | `task test:unit`                 | юнит-тесты                                |
 | `task test:integration`          | интеграционные тесты (Docker)             |
-| `task infra:up` / `infra:down`   | PostgreSQL, Redis, NATS                   |
+| `task certs:generate`            | TLS/mTLS сертификаты (первый запуск)      |
+| `task jwt:mint USER_ID=<uuid>`   | Mint JWT без login (load test / CI)       |
+| `task infra:up` / `infra:down`   | PostgreSQL, Redis, NATS (требует certs)   |
 | `task obs:up` / `obs:down`       | Полный стек наблюдаемости (см. ниже)      |
 | `task obs:demo`                  | Демо-трафик для метрик и алертов          |
 | `task build`                     | сборка бинарников в `bin/`                |
@@ -103,17 +106,36 @@ GitHub Actions: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 
 Полный стек в [`docker-compose.yml`](docker-compose.yml): Loki, Promtail, Prometheus, Alertmanager, Jaeger, Grafana, exporters.
 
+Перед первым запуском:
+
+```bash
+task certs:generate
+cp .env.example .env
+```
+
 | Сервис            | URL                                 |
 | ----------------- | ----------------------------------- |
-| order-service API | http://localhost:8080               |
+| order-service API | https://localhost:8080 (`curl -k`)  |
 | Prometheus        | http://localhost:9090               |
 | Grafana           | http://localhost:3000 (admin/admin) |
 | Jaeger UI         | http://localhost:16686              |
 | Alertmanager      | http://localhost:9093               |
 | Loki              | http://localhost:3100               |
 
+Аутентификация order-service API:
+
 ```bash
-task obs:up      # поднять всё
+# Login
+curl -k -X POST https://localhost:8080/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"demo@example.com","password":"demo123"}'
+
+# API с токеном
+curl -k https://localhost:8080/cart -H "Authorization: Bearer <access_token>"
+```
+
+```bash
+task obs:up      # поднять всё (генерирует certs автоматически)
 task obs:demo    # сгенерировать трафик
 task obs:down    # остановить
 ```

@@ -9,14 +9,15 @@
 ```
 services/order-service/
   cmd/                         — точка входа, wiring
-  deploy/Dockerfile            — multistage (scratch)
-  migrations/                  — goose SQL-миграции
+  deploy/Dockerfile            — multistage (scratch) + TLS certs
+  migrations/                  — goose SQL-миграции (orders, users)
   internal/
     config/                    — caarlos0/env
-    domain/                    — Cart, Order, OrderItem
-    app/                       — use cases, порты
+    domain/                    — Cart, Order, User
+    app/                       — use cases, AuthService
     adapters/
-      http/                      — REST handlers
+      http/                      — REST handlers, JWT middleware
+      user_repository/postgres/
       cart_repository/
         memory/                  — USE_MEMORY=true
         redis/
@@ -24,81 +25,93 @@ services/order-service/
         memory/                  — USE_MEMORY=true
         postgres/
       event_publisher/
-        nats/
+        nats/                    — TLS + client cert
 ```
 
-Общие пакеты: [`pkg/logging`](../../pkg/logging), [`pkg/health`](../../pkg/health).
+Общие пакеты: [`pkg/auth`](../../pkg/auth), [`pkg/middleware`](../../pkg/middleware), [`pkg/tlsutil`](../../pkg/tlsutil).
 
 ## Требования
 
 - Go 1.26.4
 - Docker (инфраструктура и integration-тесты)
+- OpenSSL (генерация dev-сертификатов)
 - [Task](https://taskfile.dev/) — команды из **корня монорепозитория**
 
 ## Конфигурация
 
 Шаблон: [`.env.example`](.env.example)
 
-| Переменная                    | Описание                                     | По умолчанию               |
-| ----------------------------- | -------------------------------------------- | -------------------------- |
-| `HTTP_ADDR`                   | Адрес HTTP-сервера                           | `:8080`                    |
-| `DATABASE_URL`                | PostgreSQL DSN                               | —                          |
-| `REDIS_ADDR`                  | Redis                                        | `localhost:6379`           |
-| `NATS_URL`                    | NATS                                         | `nats://localhost:4222`    |
-| `USE_MEMORY`                  | In-memory repos (без Docker)                 | `false`                    |
-| `LOG_LEVEL`                   | slog level                                   | `info`                     |
-| `LOG_FORMAT`                  | `json` или `text`                            | `json`                     |
-| `ORDER_CREATED_SUBJECT`       | NATS subject для `PublishOrderCreated`       | `orders.created`           |
-| `RESERVE_ITEMS_SUBJECT`       | NATS subject для `PublishReserveItems`       | `cart.reserve_items`       |
-| `CONFIRM_ORDER_SUBJECT`       | NATS subject для `PublishConfirmOrder`       | `orders.confirm`           |
-| `RELEASE_RESERVATION_SUBJECT` | NATS subject для `PublishReleaseReservation` | `cart.release_reservation` |
-| `ORDER_FINALIZED_SUBJECT`     | NATS subject для `PublishOrderFinalized`     | `orders.finalized`         |
-| `ORDER_CANCELLED_SUBJECT`     | NATS subject для `PublishOrderCancelled`     | `orders.cancelled`         |
+| Переменная           | Описание                      | По умолчанию           |
+| -------------------- | ----------------------------- | ---------------------- |
+| `HTTP_ADDR`          | Адрес HTTPS-сервера           | `:8080`                |
+| `JWT_SECRET`         | Секрет HS256 (min 32 символа) | —                      |
+| `JWT_TTL`            | TTL токена                    | `24h`                  |
+| `TLS_CERT_FILE`      | Server certificate            | —                      |
+| `TLS_KEY_FILE`       | Server private key            | —                      |
+| `TLS_CLIENT_CA_FILE` | CA для mTLS client cert       | —                      |
+| `NATS_URL`           | NATS URL                      | `tls://localhost:4222` |
+| `NATS_TLS_*`         | Client cert для NATS          | —                      |
+| `DATABASE_URL`       | PostgreSQL DSN                | —                      |
+| `REDIS_ADDR`         | Redis                         | `localhost:6379`       |
+| `USE_MEMORY`         | In-memory repos (без Docker)  | `false`                |
+
+Demo users (seed): `demo@example.com` / `demo123`, `admin@example.com` / `admin123`.
 
 ## Команды
 
-| Команда                          | Описание                  |
-| -------------------------------- | ------------------------- |
-| `task infra:up`                  | PostgreSQL, Redis, NATS   |
-| `task run SERVICE=order-service` | запуск локально           |
-| `task test:unit`                 | юнит-тесты                |
-| `task test:integration`          | testcontainers            |
-| `task lint`                      | golangci-lint             |
-| `task build`                     | `bin/order-service`       |
-| `task docker:build`              | образ `order-service:dev` |
+| Команда                          | Описание                      |
+| -------------------------------- | ----------------------------- |
+| `task certs:generate`            | TLS/mTLS сертификаты (dev)    |
+| `task infra:up`                  | PostgreSQL, Redis, NATS       |
+| `task obs:up`                    | Полный стек (certs + compose) |
+| `task run SERVICE=order-service` | запуск локально               |
+| `task jwt:mint USER_ID=<uuid>`   | выпуск JWT для тестов         |
+| `task test:unit`                 | юнит-тесты                    |
+| `task test:integration`          | testcontainers                |
+| `task lint`                      | golangci-lint                 |
+| `task build`                     | `bin/order-service`           |
 
 ## API
 
-Идентификация: заголовок `X-User-ID: <uuid>`.
+**HTTPS-only.** Идентификация: `Authorization: Bearer <jwt>` (получить через `/auth/login`).
 
-| Метод  | Путь                      | Описание                         |
-| ------ | ------------------------- | -------------------------------- |
-| GET    | `/health`                 | liveness (без проверки deps)     |
-| GET    | `/ready`                  | readiness (PG, Redis, NATS)      |
-| POST   | `/cart/items`             | добавить товар                   |
-| GET    | `/cart`                   | корзина                          |
-| DELETE | `/cart/items/{productID}` | удалить позицию                  |
-| POST   | `/orders`                 | оформить заказ + `ORDER_CREATED` |
-| GET    | `/orders/{id}`            | заказ                            |
-| DELETE | `/orders/{id}`            | отменить                         |
+| Метод  | Путь                      | Auth       | Описание        |
+| ------ | ------------------------- | ---------- | --------------- |
+| GET    | `/health`                 | —          | liveness        |
+| GET    | `/ready`                  | —          | readiness       |
+| POST   | `/auth/login`             | —          | login → JWT     |
+| POST   | `/cart/items`             | JWT        | добавить товар  |
+| GET    | `/cart`                   | JWT        | корзина         |
+| DELETE | `/cart/items/{productID}` | JWT        | удалить позицию |
+| POST   | `/orders`                 | JWT        | оформить заказ  |
+| GET    | `/orders/{id}`            | JWT / mTLS | заказ           |
+| DELETE | `/orders/{id}`            | JWT        | отменить        |
 
-### Пример (с инфраструктурой)
+### Пример
 
 ```bash
-task infra:up
+task certs:generate
 export $(grep -v '^#' services/order-service/.env.example | xargs)
+task infra:up
 task run SERVICE=order-service
 
-curl localhost:8080/ready
+curl -k https://localhost:8080/ready
+curl -k -X POST https://localhost:8080/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"demo@example.com","password":"demo123"}'
 ```
 
 ## Docker
 
 ```bash
+task certs:generate
 task docker:build
-docker run --rm -e USE_MEMORY=true -p 8080:8080 order-service:dev
+task docker:run SERVICE=order-service
+curl -k https://localhost:8080/health
 ```
 
-В CI smoke используется `USE_MEMORY=true`. В production-like окружении задайте `DATABASE_URL`, `REDIS_ADDR`, `NATS_URL`.
+В CI smoke: certs генерируются на лету, `USE_MEMORY=true`, HTTPS health check.
 
 Образ в GHCR: `ghcr.io/<owner>/<repo>/order-service`.
+
+Подробности: [docs/SPRINT4_REPORT.md](../../docs/SPRINT4_REPORT.md).
