@@ -32,12 +32,13 @@ microservices/
 
 ## Документация
 
-| Документ                                    | Описание                    |
-| ------------------------------------------- | --------------------------- |
-| [DESIGN.md](docs/DESIGN.md)                 | Архитектура, ADR, диаграммы |
-| [PLAN.md](docs/PLAN.md)                     | План-график спринтов        |
-| [OREDER-SERVICE.md](docs/OREDER-SERVICE.md) | Бизнес-домен Order Service  |
-| [SPRINT1_REPORT.md](docs/SPRINT1_REPORT.md) | Отчёт спринта 1 (CI/CD)     |
+| Документ                                        | Описание                      |
+| ----------------------------------------------- | ----------------------------- |
+| [DESIGN.md](docs/DESIGN.md)                     | Архитектура, ADR, диаграммы   |
+| [PLAN.md](docs/PLAN.md)                         | План-график спринтов          |
+| [ORDER-SERVICE.md](docs/ORDER-SERVICE.md)     | Бизнес-домен Order Service    |
+| [SPRINT1_REPORT.md](docs/SPRINT1_REPORT.md)     | Отчёт спринта 1 (CI/CD)       |
+| [SPRINT2_REPORT.md](docs/SPRINT2_REPORT.md)     | Отчёт спринта 2 (deps, integration, load test) |
 
 ## Микросервисы
 
@@ -53,6 +54,7 @@ microservices/
 | -------------------------------- | ----------------------------------------- |
 | `task lint`                      | golangci-lint (все сервисы из `SERVICES`) |
 | `task test:unit`                 | юнит-тесты                                |
+| `task test:integration`          | интеграционные тесты (Docker)             |
 | `task infra:up` / `infra:down`   | PostgreSQL, Redis, NATS                   |
 | `task build`                     | сборка бинарников в `bin/`                |
 | `task run SERVICE=<name>`        | запуск одного сервиса                     |
