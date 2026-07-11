@@ -1,0 +1,50 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 20, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "expr": "{service=\"order-service\", trace_id=~\"$trace_id\"} | json",
+          "refId": "A"
+        }
+      ],
+      "title": "Order Service Logs",
+      "type": "logs"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["order-service", "logs"],
+  "templating": {
+    "list": [
+      {
+        "current": { "text": ".*", "value": ".*" },
+        "label": "trace_id",
+        "name": "trace_id",
+        "options": [],
+        "query": ".*",
+        "type": "textbox"
+      }
+    ]
+  },
+  "time": { "from": "now-15m", "to": "now" },
+  "title": "Order Service Logs",
+  "uid": "order-service-logs",
+  "version": 1
+}

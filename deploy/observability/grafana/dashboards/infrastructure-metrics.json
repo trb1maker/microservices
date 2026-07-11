@@ -1,0 +1,79 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "targets": [
+        {
+          "expr": "pg_stat_database_numbackends{datname=\"orders\"}",
+          "legendFormat": "connections",
+          "refId": "A"
+        }
+      ],
+      "title": "PostgreSQL Connections",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "rate(pg_stat_database_xact_commit{datname=\"orders\"}[1m])",
+          "legendFormat": "commits/s",
+          "refId": "A"
+        }
+      ],
+      "title": "PostgreSQL Transactions",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "targets": [
+        {
+          "expr": "nats_varz_connections",
+          "legendFormat": "connections",
+          "refId": "A"
+        }
+      ],
+      "title": "NATS Connections",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "targets": [
+        {
+          "expr": "nats_varz_in_msgs",
+          "legendFormat": "in msgs",
+          "refId": "A"
+        },
+        {
+          "expr": "nats_varz_out_msgs",
+          "legendFormat": "out msgs",
+          "refId": "B"
+        }
+      ],
+      "title": "NATS Messages",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["infrastructure"],
+  "templating": { "list": [] },
+  "time": { "from": "now-15m", "to": "now" },
+  "title": "Infrastructure Metrics",
+  "uid": "infrastructure-metrics",
+  "version": 1
+}
