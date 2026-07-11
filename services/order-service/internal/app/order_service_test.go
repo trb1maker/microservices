@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -81,7 +82,7 @@ func setupOrderService(t *testing.T, events EventPublisher) (*OrderService, doma
 	require.NoError(t, err)
 	require.NoError(t, cartRepo.Save(t.Context(), cart))
 
-	return NewOrderService(cartRepo, orderRepo, events), userID
+	return NewOrderService(cartRepo, orderRepo, events, NewNoopOrderMetrics()), userID
 }
 
 func TestOrderService_Checkout_happyPath(t *testing.T) {
@@ -171,4 +172,154 @@ func TestOrderService_CancelOrder_wrongUser(t *testing.T) {
 	cancelled, err := service.CancelOrder(t.Context(), otherUser, order.OrderID(), time.Now())
 	require.ErrorIs(t, err, ErrOrderNotFound)
 	assert.Nil(t, cancelled)
+}
+
+func TestOrderService_CancelOrder_publishFailureKeepsCancelledOrder(t *testing.T) {
+	t.Parallel()
+
+	events := &recordingEventPublisher{orderCancelledErr: errPublishUnavailable}
+	service, userID := setupOrderService(t, events)
+
+	order, err := service.Checkout(t.Context(), userID, "Moscow", time.Now())
+	require.NoError(t, err)
+
+	cancelled, err := service.CancelOrder(t.Context(), userID, order.OrderID(), time.Now())
+	require.Error(t, err)
+	assert.Nil(t, cancelled)
+
+	stored, err := service.orders.Get(t.Context(), order.OrderID())
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, domain.OrderStatusCancelled, stored.Status())
+}
+
+func TestOrderService_CancelOrder_releaseReservationFailure(t *testing.T) {
+	t.Parallel()
+
+	events := &recordingEventPublisher{releaseReservationErr: errPublishUnavailable}
+	service, userID := setupOrderService(t, events)
+
+	order, err := service.Checkout(t.Context(), userID, "Moscow", time.Now())
+	require.NoError(t, err)
+
+	cancelled, err := service.CancelOrder(t.Context(), userID, order.OrderID(), time.Now())
+	require.Error(t, err)
+	assert.Nil(t, cancelled)
+
+	stored, err := service.orders.Get(t.Context(), order.OrderID())
+	require.NoError(t, err)
+	assert.Equal(t, domain.OrderStatusCancelled, stored.Status())
+
+	events.mu.Lock()
+	defer events.mu.Unlock()
+	require.Len(t, events.orderCancelled, 1)
+	require.Len(t, events.releaseReservation, 1)
+}
+
+var errDeleteUnavailable = errors.New("delete unavailable")
+
+type failingDeleteOrderRepo struct {
+	inner     *ordermemory.OrderRepository
+	deleteErr error
+}
+
+func (r *failingDeleteOrderRepo) Get(ctx context.Context, orderID domain.OrderID) (*domain.Order, error) {
+	order, err := r.inner.Get(ctx, orderID)
+	if err != nil {
+		return nil, fmt.Errorf("get order: %w", err)
+	}
+
+	return order, nil
+}
+
+func (r *failingDeleteOrderRepo) Save(ctx context.Context, order *domain.Order) error {
+	if err := r.inner.Save(ctx, order); err != nil {
+		return fmt.Errorf("save order: %w", err)
+	}
+
+	return nil
+}
+
+func (r *failingDeleteOrderRepo) Delete(_ context.Context, _ domain.OrderID) error {
+	return r.deleteErr
+}
+
+func (r *failingDeleteOrderRepo) CountActiveOrders(ctx context.Context) (int, error) {
+	count, err := r.inner.CountActiveOrders(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("count active orders: %w", err)
+	}
+
+	return count, nil
+}
+
+func TestOrderService_Checkout_publishFailureWithRollbackFailure(t *testing.T) {
+	t.Parallel()
+
+	cartRepo := cartmemory.NewCartRepository()
+	orderRepo := &failingDeleteOrderRepo{
+		inner:     ordermemory.NewOrderRepository(),
+		deleteErr: errDeleteUnavailable,
+	}
+	userID := domain.UserID(uuid.New())
+
+	item, err := domain.NewOrderItem(domain.ProductID(uuid.New()), 1, 100)
+	require.NoError(t, err)
+
+	cart, err := domain.NewCart(userID, *item)
+	require.NoError(t, err)
+	require.NoError(t, cartRepo.Save(t.Context(), cart))
+
+	service := NewOrderService(
+		cartRepo,
+		orderRepo,
+		&recordingEventPublisher{orderCreatedErr: errPublishUnavailable},
+		NewNoopOrderMetrics(),
+	)
+
+	order, err := service.Checkout(t.Context(), userID, "Moscow", time.Now())
+	require.Error(t, err)
+	assert.Nil(t, order)
+	require.ErrorIs(t, err, errPublishUnavailable)
+	require.ErrorIs(t, err, errDeleteUnavailable)
+}
+
+type recordingOrderMetrics struct {
+	mu           sync.Mutex
+	activeOrders int
+}
+
+func (m *recordingOrderMetrics) RecordOrderCreated() {}
+
+func (m *recordingOrderMetrics) SetActiveOrders(count int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.activeOrders = count
+}
+
+func TestOrderService_Checkout_updatesActiveOrdersMetric(t *testing.T) {
+	t.Parallel()
+
+	metrics := &recordingOrderMetrics{}
+	events := &recordingEventPublisher{}
+	cartRepo := cartmemory.NewCartRepository()
+	orderRepo := ordermemory.NewOrderRepository()
+	userID := domain.UserID(uuid.New())
+
+	item, err := domain.NewOrderItem(domain.ProductID(uuid.New()), 1, 100)
+	require.NoError(t, err)
+
+	cart, err := domain.NewCart(userID, *item)
+	require.NoError(t, err)
+	require.NoError(t, cartRepo.Save(t.Context(), cart))
+
+	service := NewOrderService(cartRepo, orderRepo, events, metrics)
+
+	_, err = service.Checkout(t.Context(), userID, "Moscow", time.Now())
+	require.NoError(t, err)
+
+	metrics.mu.Lock()
+	defer metrics.mu.Unlock()
+	assert.Equal(t, 1, metrics.activeOrders)
 }

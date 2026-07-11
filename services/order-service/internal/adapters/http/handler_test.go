@@ -1,7 +1,9 @@
 package http_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,10 +44,10 @@ func newTestServer(t *testing.T) *httptest.Server {
 	cartRepo := cartmemory.NewCartRepository()
 	orderRepo := ordermemory.NewOrderRepository()
 	cartService := app.NewCartService(cartRepo)
-	orderService := app.NewOrderService(cartRepo, orderRepo, app.NewNoopEventPublisher())
+	orderService := app.NewOrderService(cartRepo, orderRepo, app.NewNoopEventPublisher(), app.NewNoopOrderMetrics())
 	handler := httpadapter.NewHandler(cartService, orderService, nil)
 
-	return httptest.NewServer(httpadapter.NewServer(":8080", handler).Handler)
+	return httptest.NewServer(httpadapter.NewServer(":8080", handler, nil, "", "").Handler)
 }
 
 func TestHealth(t *testing.T) {
@@ -238,7 +240,7 @@ func TestCancelOrder_confirmedForbidden(t *testing.T) {
 
 	cartRepo := cartmemory.NewCartRepository()
 	orderRepo := ordermemory.NewOrderRepository()
-	orderService := app.NewOrderService(cartRepo, orderRepo, app.NewNoopEventPublisher())
+	orderService := app.NewOrderService(cartRepo, orderRepo, app.NewNoopEventPublisher(), app.NewNoopOrderMetrics())
 
 	userID := domain.UserID(uuid.New())
 	item, err := domain.NewOrderItem(domain.ProductID(uuid.New()), 1, 100)
@@ -265,7 +267,7 @@ func TestCancelOrder_confirmedForbidden(t *testing.T) {
 	require.NoError(t, orderRepo.Save(t.Context(), confirmed))
 
 	handler := httpadapter.NewHandler(app.NewCartService(cartRepo), orderService, nil)
-	testServer := httptest.NewServer(httpadapter.NewServer(":8080", handler).Handler)
+	testServer := httptest.NewServer(httpadapter.NewServer(":8080", handler, nil, "", "").Handler)
 	t.Cleanup(testServer.Close)
 
 	req := newRequest(
@@ -465,4 +467,125 @@ func TestRemoveCartItem_success(t *testing.T) {
 	}
 	require.NoError(t, json.NewDecoder(removeResp.Body).Decode(&cart))
 	assert.Empty(t, cart.Items)
+}
+
+type failingReadinessChecker struct{}
+
+func (failingReadinessChecker) Check(context.Context) (bool, map[string]string) {
+	return false, map[string]string{"postgres": "connection refused"}
+}
+
+func TestReady_notReady(t *testing.T) {
+	t.Parallel()
+
+	cartRepo := cartmemory.NewCartRepository()
+	orderRepo := ordermemory.NewOrderRepository()
+	cartService := app.NewCartService(cartRepo)
+	orderService := app.NewOrderService(cartRepo, orderRepo, app.NewNoopEventPublisher(), app.NewNoopOrderMetrics())
+	handler := httpadapter.NewHandler(cartService, orderService, failingReadinessChecker{})
+
+	server := httptest.NewServer(httpadapter.NewServer(":8080", handler, nil, "", "").Handler)
+	t.Cleanup(server.Close)
+
+	resp := doRequest(t, newRequest(t, http.MethodGet, server.URL+"/ready", ""))
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+
+	var body struct {
+		Status string            `json:"status"`
+		Checks map[string]string `json:"checks"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "not_ready", body.Status)
+	assert.Equal(t, "connection refused", body.Checks["postgres"])
+}
+
+func TestAddCartItem_invalidUserID(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	t.Cleanup(server.Close)
+
+	req := newRequest(
+		t,
+		http.MethodPost,
+		server.URL+"/cart/items",
+		`{"product_id":"`+uuid.New().String()+`","quantity":1,"unit_price":100}`,
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", "not-a-uuid")
+
+	resp := doRequest(t, req)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestGetOrder_invalidOrderID(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	t.Cleanup(server.Close)
+
+	req := newRequest(t, http.MethodGet, server.URL+"/orders/not-a-uuid", "")
+	req.Header.Set("X-User-ID", uuid.New().String())
+
+	resp := doRequest(t, req)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestRemoveCartItem_invalidProductID(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	t.Cleanup(server.Close)
+
+	req := newRequest(t, http.MethodDelete, server.URL+"/cart/items/not-a-uuid", "")
+	req.Header.Set("X-User-ID", uuid.New().String())
+
+	resp := doRequest(t, req)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+type errorCartService struct{}
+
+var errDatabaseUnavailable = errors.New("database unavailable")
+
+func (errorCartService) AddItem(context.Context, domain.UserID, domain.OrderItem) (*domain.Cart, error) {
+	return nil, errDatabaseUnavailable
+}
+
+func (errorCartService) GetCart(context.Context, domain.UserID) (*domain.Cart, error) {
+	return nil, errDatabaseUnavailable
+}
+
+func (errorCartService) RemoveItem(context.Context, domain.UserID, domain.ProductID) (*domain.Cart, error) {
+	return nil, errDatabaseUnavailable
+}
+
+func TestGetCart_internalError(t *testing.T) {
+	t.Parallel()
+
+	orderService := app.NewOrderService(
+		cartmemory.NewCartRepository(),
+		ordermemory.NewOrderRepository(),
+		app.NewNoopEventPublisher(),
+		app.NewNoopOrderMetrics(),
+	)
+	handler := httpadapter.NewHandler(errorCartService{}, orderService, nil)
+	server := httptest.NewServer(httpadapter.NewServer(":8080", handler, nil, "", "").Handler)
+	t.Cleanup(server.Close)
+
+	req := newRequest(t, http.MethodGet, server.URL+"/cart", "")
+	req.Header.Set("X-User-ID", uuid.New().String())
+
+	resp := doRequest(t, req)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }
