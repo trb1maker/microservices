@@ -53,7 +53,12 @@ func (r *CartRepository) Get(ctx context.Context, userID domain.UserID) (*domain
 		return nil, fmt.Errorf("unmarshal cart: %w", err)
 	}
 
-	return fromDTO(dto)
+	cart, err := fromDTO(dto)
+	if err != nil {
+		return nil, err
+	}
+
+	return cart, nil
 }
 
 func (r *CartRepository) Save(ctx context.Context, cart *domain.Cart) error {
@@ -122,7 +127,7 @@ func fromDTO(dto cartDTO) (*domain.Cart, error) {
 		items = append(items, *item)
 	}
 
-	cart, err := domain.NewCart(domain.UserID(userID), items...)
+	cart, err := domain.ReconstituteCart(domain.UserID(userID), dto.UpdatedAt, items...)
 	if err != nil {
 		return nil, fmt.Errorf("build cart: %w", err)
 	}

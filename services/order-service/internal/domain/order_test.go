@@ -94,6 +94,7 @@ func TestNewOrder(t *testing.T) {
 				tt.userID,
 				tt.status,
 				tt.paymentID,
+				"Moscow",
 				now,
 				now,
 				tt.items...,
@@ -127,7 +128,7 @@ func TestNewOrder_Items_returnsClone(t *testing.T) {
 	item := mustOrderItem(t, ProductID(uuid.New()), 1, 100)
 	now := time.Now()
 
-	order, err := NewOrder(orderID, userID, OrderStatusPending, PaymentID{}, now, now, item)
+	order, err := NewOrder(orderID, userID, OrderStatusPending, PaymentID{}, "Moscow", now, now, item)
 	require.NoError(t, err)
 
 	items := order.Items()

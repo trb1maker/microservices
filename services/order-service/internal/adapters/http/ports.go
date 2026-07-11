@@ -15,8 +15,8 @@ type CartService interface {
 
 type OrderService interface {
 	Checkout(ctx context.Context, userID domain.UserID, deliveryAddress string, now time.Time) (*domain.Order, error)
-	GetOrder(ctx context.Context, orderID domain.OrderID) (*domain.Order, error)
-	CancelOrder(ctx context.Context, orderID domain.OrderID, now time.Time) (*domain.Order, error)
+	GetOrder(ctx context.Context, userID domain.UserID, orderID domain.OrderID) (*domain.Order, error)
+	CancelOrder(ctx context.Context, userID domain.UserID, orderID domain.OrderID, now time.Time) (*domain.Order, error)
 }
 
 type ReadinessChecker interface {

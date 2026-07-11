@@ -132,13 +132,19 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
+	userID, err := parseUserID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
 	orderID, err := parseOrderID(r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 
-	order, err := h.orders.GetOrder(r.Context(), orderID)
+	order, err := h.orders.GetOrder(r.Context(), userID, orderID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -148,13 +154,19 @@ func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) CancelOrder(w http.ResponseWriter, r *http.Request) {
+	userID, err := parseUserID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
 	orderID, err := parseOrderID(r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 
-	order, err := h.orders.CancelOrder(r.Context(), orderID, time.Now())
+	order, err := h.orders.CancelOrder(r.Context(), userID, orderID, time.Now())
 	if err != nil {
 		writeError(w, err)
 		return

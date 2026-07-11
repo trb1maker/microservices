@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/trb1maker/microservices/services/order-service/internal/domain"
@@ -27,14 +28,28 @@ func (r *CartRepository) Get(_ context.Context, userID domain.UserID) (*domain.C
 		return nil, nil
 	}
 
-	return cart, nil
+	return cloneCart(cart)
 }
 
 func (r *CartRepository) Save(_ context.Context, cart *domain.Cart) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.carts[cart.UserID()] = cart
+	cloned, err := cloneCart(cart)
+	if err != nil {
+		return err
+	}
+
+	r.carts[cart.UserID()] = cloned
 
 	return nil
+}
+
+func cloneCart(cart *domain.Cart) (*domain.Cart, error) {
+	cloned, err := domain.ReconstituteCart(cart.UserID(), cart.UpdatedAt(), cart.Items()...)
+	if err != nil {
+		return nil, fmt.Errorf("reconstitute cart: %w", err)
+	}
+
+	return cloned, nil
 }

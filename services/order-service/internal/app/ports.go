@@ -14,6 +14,7 @@ type CartRepository interface {
 type OrderRepository interface {
 	Get(ctx context.Context, orderID domain.OrderID) (*domain.Order, error)
 	Save(ctx context.Context, order *domain.Order) error
+	Delete(ctx context.Context, orderID domain.OrderID) error
 }
 
 type CartEventPublisher interface {
@@ -26,4 +27,9 @@ type OrderEventPublisher interface {
 	PublishConfirmOrder(ctx context.Context, event ConfirmOrder) error
 	PublishOrderFinalized(ctx context.Context, event OrderFinalized) error
 	PublishOrderCancelled(ctx context.Context, event OrderCancelled) error
+}
+
+type EventPublisher interface {
+	OrderEventPublisher
+	CartEventPublisher
 }

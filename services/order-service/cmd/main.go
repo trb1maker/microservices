@@ -33,22 +33,19 @@ import (
 const shutdownTimeout = 10 * time.Second
 
 func main() {
-	logger, err := logging.New(
-		envOrDefault("LOG_LEVEL", "info"),
-		envOrDefault("LOG_FORMAT", "json"),
-	)
+	cfg, err := config.Load()
+	if err != nil {
+		slog.Error("failed to load config", slog.Any("error", err))
+		os.Exit(1)
+	}
+
+	logger, err := logging.New(cfg.LogLevel, cfg.LogFormat)
 	if err != nil {
 		slog.Error("failed to init logger", slog.Any("error", err))
 		os.Exit(1)
 	}
 
 	slog.SetDefault(logger)
-
-	cfg, err := config.Load()
-	if err != nil {
-		logger.Error("failed to load config", slog.Any("error", err))
-		os.Exit(1)
-	}
 
 	ctx := context.Background()
 
@@ -90,7 +87,7 @@ func buildDependencies(
 	ctx context.Context,
 	cfg *config.Config,
 	logger *slog.Logger,
-) (app.CartRepository, app.OrderRepository, app.OrderEventPublisher, *health.Checker, func(), error) {
+) (app.CartRepository, app.OrderRepository, app.EventPublisher, *health.Checker, func(), error) {
 	if cfg.UseMemory {
 		logger.Info("using in-memory repositories")
 		return cartmemory.NewCartRepository(), ordermemory.NewOrderRepository(), app.NewNoopEventPublisher(), health.NewChecker(nil), func() {}, nil
@@ -159,14 +156,6 @@ func buildDependencies(
 func closePostgres(db interface{ Close() error }, pool *pgxpool.Pool) {
 	_ = db.Close()
 	pool.Close()
-}
-
-func envOrDefault(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-
-	return fallback
 }
 
 type configError string
