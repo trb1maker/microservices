@@ -39,8 +39,10 @@ import (
 )
 
 const (
-	orderCreatedSubject = "orders.created"
-	startupTimeout      = 2 * time.Minute
+	orderCreatedSubject       = "orders.created"
+	orderCancelledSubject     = "orders.cancelled"
+	releaseReservationSubject = "cart.release_reservation"
+	startupTimeout            = 2 * time.Minute
 )
 
 type testEnv struct {
@@ -135,9 +137,9 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 
 	cartService := app.NewCartService(cartRepo)
-	orderService := app.NewOrderService(cartRepo, orderRepo, events)
+	orderService := app.NewOrderService(cartRepo, orderRepo, events, app.NewNoopOrderMetrics())
 	handler := httpadapter.NewHandler(cartService, orderService, health.NewChecker(checks))
-	server := httptest.NewServer(httpadapter.NewServer(":8080", handler).Handler)
+	server := httptest.NewServer(httpadapter.NewServer(":8080", handler, nil, "", "").Handler)
 	t.Cleanup(server.Close)
 
 	return &testEnv{
@@ -284,6 +286,27 @@ func TestIntegration_CancelOrder(t *testing.T) {
 	userID := uuid.New().String()
 	productID := uuid.New().String()
 
+	cancelledCh := make(chan []byte, 1)
+	releaseCh := make(chan []byte, 1)
+
+	cancelSub, err := env.natsConn.Subscribe(orderCancelledSubject, func(msg *natspkg.Msg) {
+		select {
+		case cancelledCh <- msg.Data:
+		default:
+		}
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cancelSub.Unsubscribe() })
+
+	releaseSub, err := env.natsConn.Subscribe(releaseReservationSubject, func(msg *natspkg.Msg) {
+		select {
+		case releaseCh <- msg.Data:
+		default:
+		}
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = releaseSub.Unsubscribe() })
+
 	addResp := env.doJSON(t, http.MethodPost, "/cart/items", userID, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
 		productID,
@@ -309,6 +332,32 @@ func TestIntegration_CancelOrder(t *testing.T) {
 	}
 	require.NoError(t, json.NewDecoder(cancelResp.Body).Decode(&cancelled))
 	assert.Equal(t, "CANCELLED", cancelled.Status)
+
+	select {
+	case payload := <-cancelledCh:
+		var event struct {
+			OrderID string `json:"order_id"`
+			UserID  string `json:"user_id"`
+		}
+		require.NoError(t, json.Unmarshal(payload, &event))
+		assert.Equal(t, order.OrderID, event.OrderID)
+		assert.Equal(t, userID, event.UserID)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for ORDER_CANCELLED event")
+	}
+
+	select {
+	case payload := <-releaseCh:
+		var event struct {
+			OrderID string `json:"order_id"`
+			UserID  string `json:"user_id"`
+		}
+		require.NoError(t, json.Unmarshal(payload, &event))
+		assert.Equal(t, order.OrderID, event.OrderID)
+		assert.Equal(t, userID, event.UserID)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for RELEASE_RESERVATION event")
+	}
 }
 
 func TestIntegration_GetOrder_wrongUser(t *testing.T) {
