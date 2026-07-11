@@ -65,7 +65,7 @@ tasks:
     requires:
       vars: [SERVICE]
     cmds:
-      - docker run --rm -p 8080:8080 {{.SERVICE}}:{{.DOCKER_TAG}}
+      - docker run --rm -p 8080:8080 -e USE_MEMORY=true {{.SERVICE}}:{{.DOCKER_TAG}}
     silent: true
 
   infra:up:
