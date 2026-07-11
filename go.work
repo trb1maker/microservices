@@ -1,3 +1,6 @@
 go 1.26.4
 
-use ./services/order-service
+use (
+	./pkg
+	./services/order-service
+)

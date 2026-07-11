@@ -23,7 +23,7 @@
 
 ### ADR 2. Резервирование товаров на этапе корзины (асинхронно)
 **Контекст:** Товар может быть дефицитным.  
-**Решение:** Добавление товара в корзину инициирует асинхронное событие `RESERVE_ITEMS` в Inventory Service через NATS.  
+**Решение:** Добавление товара в корзину инициирует асинхронное событие `RESERVE_ITEMS` в Store Service через NATS.  
 **Обоснование:** Это позволяет "заморозить" товар за пользователем до момента оплаты, снижая конфликты. При этом операция добавления в корзину не блокирует пользовательский интерфейс (асинхронность через брокер).
 
 ### ADR 3. gRPC Streaming для статусов, а не для данных
@@ -35,7 +35,7 @@
 **Контекст:** Разные сервисы имеют разные требования к данным.  
 **Решение:**
 - **PostgreSQL:** Order Service (транзакции, ACID), Payment Service (финансовые операции).
-- **MongoDB:** Inventory Service (гибкая схема для хранения атрибутов товаров, размеров, цветов).
+- **MongoDB:** Store Service (гибкая схема для хранения атрибутов товаров, размеров, цветов).
 - **Redis:** Внешний кэш для Session/корзины в Order Service.
 **Обоснование:** Полиглотное хранение позволяет использовать лучший инструмент под задачу.
 
@@ -54,6 +54,14 @@
 **Решение:** Использовать Loki для аггрегации логов и Grafana для их просмотра.  
 **Обоснование:** Loki потребляет значительно меньше ресурсов, чем Elasticsearch, и тесно интегрируется с Grafana, что упрощает настройку дашбордов для "звездочки".
 
+### ADR 8. Общие пакеты в `pkg/`
+
+**Контекст:** Несколько микросервисов используют одинаковую инфраструктуру (slog, health probes).  
+**Решение:** Вынести технический код в отдельный Go-модуль [`pkg/`](../pkg/) (`logging`, `health`, позже — OTel/Prometheus helpers).  
+**Связь с сервисами:** модуль `github.com/trb1maker/microservices/pkg`; в `go.mod` каждого сервиса — `require` + `replace => ../../pkg` (подмодуль не публикуется в proxy). В [`go.work`](../go.work) — `use` для `pkg` и всех сервисов; Docker копирует `go.work` при сборке.
+**Обоснование:** Единообразие логов и проб без дублирования; домен и конфигурация остаются в `services/<name>/internal/`.  
+**Не входит в pkg:** бизнес-сущности, use cases, миграции БД, env-структуры сервисов.
+
 ---
 
 ## 3. Описание бизнес-процесса (User Journey)
@@ -62,9 +70,9 @@
 
 ### 3.1. Сценарий A: Успешное оформление заказа
 
-1. **Корзина:** Пользователь добавляет товар. Order Service отправляет событие `RESERVE_ITEMS` в NATS. Inventory Service резервирует товар (MongoDB), публикует `ITEMS_RESERVED`. Order обновляет статус корзины.
+1. **Корзина:** Пользователь добавляет товар. Order Service отправляет событие `RESERVE_ITEMS` в NATS. Store Service резервирует товар (MongoDB), публикует `ITEMS_RESERVED`. Order обновляет статус корзины.
 2. **Платеж:** Пользователь нажимает "Оплатить". Order Service вызывает Payment Service **синхронно** по gRPC (`Charge`). Деньги списаны.
-3. **Склад:** Order Service публикует `CONFIRM_ORDER`. Inventory Service получает событие и переводит резерв в реальное списание. Публикует `ORDER_CONFIRMED`.
+3. **Склад:** Order Service публикует `CONFIRM_ORDER`. Store Service получает событие и переводит резерв в реальное списание. Публикует `ORDER_CONFIRMED`.
 4. **Финализация:** Order Service меняет статус заказа на `CONFIRMED`. Публикует `ORDER_FINALIZED`.
 5. **Но и Аналитика:** Notification Service шлет уведомление (лог). Analytics Service слушает событие, сохраняет чек в MinIO и витрину в PostgreSQL.
 
@@ -72,7 +80,7 @@
 
 1. Пункты 1-2 (Платеж) выполнены. Деньги списаны успешно.
 2. Order шлет `CONFIRM_ORDER`.
-3. Inventory Service не может выполнить списание (не хватает кол-ва). Он шлет событие `RESERVATION_FAILED`.
+3. Store Service не может выполнить списание (не хватает кол-ва). Он шлет событие `RESERVATION_FAILED`.
 4. Order Service получает `RESERVATION_FAILED`. Запускает **компенсирующую транзакцию**:
     - Синхронно вызывает gRPC-метод `Refund` у Payment Service (возврат денег).
     - Меняет статус заказа на `CANCELLED`.
@@ -96,7 +104,7 @@
 | :--- | :------------------- | :----------------------------------------------------------------------------------- | :------------------------------------------------------------------------ | :--------------------------------------------- | :------------------------------------------------- |
 | 1    | Order Service (BFF)  | Управление корзиной, заказами, жизненным циклом. Оркестрация Saga на основе событий. | **REST** (Фронт)<br>**NATS** (Ответы склада)<br>**gRPC** (Stream-клиенты) | gRPC (Платежи)<br>**NATS** (Команды складу)    | **PostgreSQL** (заказы)<br>**Redis** (кэш корзины) |
 | 2    | Payment Service      | Обработка платежей и возвратов. Гарантирует консистентность денежных средств.        | **gRPC** (Унарный `Charge`/`Refund`)                                      | **NATS** (События платежей для аналитики)      | **PostgreSQL** (транзакции)                        |
-| 3    | Inventory Service    | Резервирование, списание и управление складскими остатками.                          | **NATS** (Команды: резерв, подтверждение, освобождение)                   | **NATS** (Результаты операций)                 | **MongoDB** (гибкая схема товаров)                 |
+| 3    | Store Service        | Резервирование, списание и управление складскими остатками.                          | **NATS** (Команды: резерв, подтверждение, освобождение)                   | **NATS** (Результаты операций)                 | **MongoDB** (гибкая схема товаров)                 |
 | 4    | Notification Service | Отправка уведомлений (email/sms) пользователю.                                       | **NATS** (События финализации/отмены)                                     | **Loki** (логирование событий)                 | *Нет*                                              |
 | 5    | Analytics Service    | Сбор данных в "озеро" (MinIO) и построение витрин для дашбордов.                     | **NATS** (Все финальные события)                                          | **MinIO** (S3 API)<br>**PostgreSQL** (витрина) | **PostgreSQL** + **MinIO**                         |
 
@@ -133,16 +141,16 @@ sequenceDiagram
     participant User
     participant Order as Order Service (REST/gRPC)
     participant Payment as Payment Service
-    participant Inventory as Inventory Service
+    participant Store as Store Service
     participant Broker as NATS (JetStream)
     participant Analytics as Analytics Service
 
     %% Резервирование в корзине
     User->>Order: Добавить товар (POST /cart)
     Order->>Broker: Publish RESERVE_ITEMS
-    Broker->>Inventory: Deliver RESERVE_ITEMS
-    Inventory->>MongoDB: Reserve stock
-    Inventory->>Broker: Publish ITEMS_RESERVED
+    Broker->>Store: Deliver RESERVE_ITEMS
+    Store->>MongoDB: Reserve stock
+    Store->>Broker: Publish ITEMS_RESERVED
     Broker->>Order: Deliver ITEMS_RESERVED
 
     %% Оформление (Синхронный платеж)
@@ -152,9 +160,9 @@ sequenceDiagram
     Order->>Broker: Publish CONFIRM_ORDER
 
     %% Склад (Асинхронный)
-    Broker->>Inventory: Deliver CONFIRM_ORDER
-    Inventory->>MongoDB: Deduct stock
-    Inventory->>Broker: Publish ORDER_CONFIRMED
+    Broker->>Store: Deliver CONFIRM_ORDER
+    Store->>MongoDB: Deduct stock
+    Store->>Broker: Publish ORDER_CONFIRMED
     Broker->>Order: Deliver ORDER_CONFIRMED
 
     %% Финализация (стриминг статуса)

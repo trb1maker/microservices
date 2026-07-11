@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://taskfile.dev/schema.json
 
-version: '3'
+version: "3"
 
 vars:
   SERVICES:
@@ -9,27 +9,37 @@ vars:
 
 tasks:
   fmt:
-    desc: Форматирование кода во всех сервисах
+    desc: Форматирование кода
     cmds:
+      - golangci-lint fmt ./pkg/...
       - for: { var: SERVICES }
         cmd: golangci-lint fmt ./services/{{.ITEM}}/...
+    silent: true
+
+  lint:
+    desc: Линтинг кода
+    cmds:
+      - for: { var: SERVICES }
+        cmd: golangci-lint run ./pkg/... ./services/{{.ITEM}}/... --fix --max-same-issues=0
+    silent: true
 
   test:unit:
-    desc: Юнит-тесты всех сервисов
+    desc: Юнит-тестирование
     cmds:
+      - go test -v -race ./pkg/...
       - for: { var: SERVICES }
         cmd: go test -v -race ./services/{{.ITEM}}/...
     silent: true
 
-  lint:
-    desc: Линтеры всех сервисов
+  test:integration:
+    desc: Интеграционное тестирование
     cmds:
       - for: { var: SERVICES }
-        cmd: golangci-lint run ./services/{{.ITEM}}/... --fix --max-same-issues=0
+        cmd: go test -tags=integration -timeout 10m ./services/{{.ITEM}}/...
     silent: true
 
   build:
-    desc: Сборка бинарников всех сервисов в bin/
+    desc: Сборка бинарников
     cmds:
       - for: { var: SERVICES }
         cmd: go build -o bin/{{.ITEM}} ./services/{{.ITEM}}/cmd/main.go
@@ -44,16 +54,28 @@ tasks:
     silent: true
 
   docker:build:
-    desc: Сборка dev-образов ({{.ITEM}}:{{.DOCKER_TAG}}) для всех сервисов
+    desc: Сборка dev-образов
     cmds:
       - for: { var: SERVICES }
-        cmd: docker build -f services/{{.ITEM}}/deploy/Dockerfile -t {{.ITEM}}:{{.DOCKER_TAG}} services/{{.ITEM}}
+        cmd: docker build -f services/{{.ITEM}}/deploy/Dockerfile -t {{.ITEM}}:{{.DOCKER_TAG}} .
     silent: true
 
   docker:run:
-    desc: Запуск контейнера (task docker:run SERVICE=order-service)
+    desc: Запуск контейнеров (task docker:run SERVICE=order-service)
     requires:
       vars: [SERVICE]
     cmds:
       - docker run --rm -p 8080:8080 {{.SERVICE}}:{{.DOCKER_TAG}}
+    silent: true
+
+  infra:up:
+    desc: Поднять инфраструктуру
+    cmds:
+      - docker compose up -d
+    silent: true
+
+  infra:down:
+    desc: Остановить инфраструктуру
+    cmds:
+      - docker compose down -v
     silent: true
