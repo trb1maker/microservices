@@ -2,3 +2,4 @@ bin/
 .env
 **/.env
 docs/load_results/
+.DS_Store

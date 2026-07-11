@@ -39,48 +39,48 @@ services/order-service/
 
 Шаблон: [`.env.example`](.env.example)
 
-| Переменная | Описание | По умолчанию |
-|------------|----------|--------------|
-| `HTTP_ADDR` | Адрес HTTP-сервера | `:8080` |
-| `DATABASE_URL` | PostgreSQL DSN | — |
-| `REDIS_ADDR` | Redis | `localhost:6379` |
-| `NATS_URL` | NATS | `nats://localhost:4222` |
-| `USE_MEMORY` | In-memory repos (без Docker) | `false` |
-| `LOG_LEVEL` | slog level | `info` |
-| `LOG_FORMAT` | `json` или `text` | `json` |
-| `ORDER_CREATED_SUBJECT` | NATS subject для `PublishOrderCreated` | `orders.created` |
-| `RESERVE_ITEMS_SUBJECT` | NATS subject для `PublishReserveItems` | `cart.reserve_items` |
-| `CONFIRM_ORDER_SUBJECT` | NATS subject для `PublishConfirmOrder` | `orders.confirm` |
+| Переменная                    | Описание                                     | По умолчанию               |
+| ----------------------------- | -------------------------------------------- | -------------------------- |
+| `HTTP_ADDR`                   | Адрес HTTP-сервера                           | `:8080`                    |
+| `DATABASE_URL`                | PostgreSQL DSN                               | —                          |
+| `REDIS_ADDR`                  | Redis                                        | `localhost:6379`           |
+| `NATS_URL`                    | NATS                                         | `nats://localhost:4222`    |
+| `USE_MEMORY`                  | In-memory repos (без Docker)                 | `false`                    |
+| `LOG_LEVEL`                   | slog level                                   | `info`                     |
+| `LOG_FORMAT`                  | `json` или `text`                            | `json`                     |
+| `ORDER_CREATED_SUBJECT`       | NATS subject для `PublishOrderCreated`       | `orders.created`           |
+| `RESERVE_ITEMS_SUBJECT`       | NATS subject для `PublishReserveItems`       | `cart.reserve_items`       |
+| `CONFIRM_ORDER_SUBJECT`       | NATS subject для `PublishConfirmOrder`       | `orders.confirm`           |
 | `RELEASE_RESERVATION_SUBJECT` | NATS subject для `PublishReleaseReservation` | `cart.release_reservation` |
-| `ORDER_FINALIZED_SUBJECT` | NATS subject для `PublishOrderFinalized` | `orders.finalized` |
-| `ORDER_CANCELLED_SUBJECT` | NATS subject для `PublishOrderCancelled` | `orders.cancelled` |
+| `ORDER_FINALIZED_SUBJECT`     | NATS subject для `PublishOrderFinalized`     | `orders.finalized`         |
+| `ORDER_CANCELLED_SUBJECT`     | NATS subject для `PublishOrderCancelled`     | `orders.cancelled`         |
 
 ## Команды
 
-| Команда | Описание |
-|---------|----------|
-| `task infra:up` | PostgreSQL, Redis, NATS |
-| `task run SERVICE=order-service` | запуск локально |
-| `task test:unit` | юнит-тесты |
-| `task test:integration` | testcontainers |
-| `task lint` | golangci-lint |
-| `task build` | `bin/order-service` |
-| `task docker:build` | образ `order-service:dev` |
+| Команда                          | Описание                  |
+| -------------------------------- | ------------------------- |
+| `task infra:up`                  | PostgreSQL, Redis, NATS   |
+| `task run SERVICE=order-service` | запуск локально           |
+| `task test:unit`                 | юнит-тесты                |
+| `task test:integration`          | testcontainers            |
+| `task lint`                      | golangci-lint             |
+| `task build`                     | `bin/order-service`       |
+| `task docker:build`              | образ `order-service:dev` |
 
 ## API
 
 Идентификация: заголовок `X-User-ID: <uuid>`.
 
-| Метод | Путь | Описание |
-|-------|------|----------|
-| GET | `/health` | liveness (без проверки deps) |
-| GET | `/ready` | readiness (PG, Redis, NATS) |
-| POST | `/cart/items` | добавить товар |
-| GET | `/cart` | корзина |
-| DELETE | `/cart/items/{productID}` | удалить позицию |
-| POST | `/orders` | оформить заказ + `ORDER_CREATED` |
-| GET | `/orders/{id}` | заказ |
-| DELETE | `/orders/{id}` | отменить |
+| Метод  | Путь                      | Описание                         |
+| ------ | ------------------------- | -------------------------------- |
+| GET    | `/health`                 | liveness (без проверки deps)     |
+| GET    | `/ready`                  | readiness (PG, Redis, NATS)      |
+| POST   | `/cart/items`             | добавить товар                   |
+| GET    | `/cart`                   | корзина                          |
+| DELETE | `/cart/items/{productID}` | удалить позицию                  |
+| POST   | `/orders`                 | оформить заказ + `ORDER_CREATED` |
+| GET    | `/orders/{id}`            | заказ                            |
+| DELETE | `/orders/{id}`            | отменить                         |
 
 ### Пример (с инфраструктурой)
 
