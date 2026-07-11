@@ -1,3 +1,4 @@
 bin/
 .env
 **/.env
+docs/load_results/
