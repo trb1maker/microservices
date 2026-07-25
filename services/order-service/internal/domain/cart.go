@@ -4,18 +4,22 @@ import (
 	"errors"
 	"slices"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 var (
-	ErrUserIDRequired = errors.New("userID is required")
-	ErrEmptyCart      = errors.New("cart is empty")
-	ErrItemNotFound   = errors.New("item not found in cart")
+	ErrUserIDRequired       = errors.New("userID is required")
+	ErrEmptyCart            = errors.New("cart is empty")
+	ErrItemNotFound         = errors.New("item not found in cart")
+	ErrCartNotFullyReserved = errors.New("cart is not fully reserved")
 )
 
 type Cart struct {
-	userID    UserID
-	items     []OrderItem
-	updatedAt time.Time
+	userID         UserID
+	pendingOrderID OrderID
+	items          []OrderItem
+	updatedAt      time.Time
 }
 
 func NewCart(userID UserID, items ...OrderItem) (*Cart, error) {
@@ -34,7 +38,7 @@ func NewCart(userID UserID, items ...OrderItem) (*Cart, error) {
 	}, nil
 }
 
-func ReconstituteCart(userID UserID, updatedAt time.Time, items ...OrderItem) (*Cart, error) {
+func ReconstituteCart(userID UserID, pendingOrderID OrderID, updatedAt time.Time, items ...OrderItem) (*Cart, error) {
 	if userID == (UserID{}) {
 		return nil, ErrUserIDRequired
 	}
@@ -44,14 +48,19 @@ func ReconstituteCart(userID UserID, updatedAt time.Time, items ...OrderItem) (*
 	}
 
 	return &Cart{
-		userID:    userID,
-		items:     items,
-		updatedAt: updatedAt,
+		userID:         userID,
+		pendingOrderID: pendingOrderID,
+		items:          items,
+		updatedAt:      updatedAt,
 	}, nil
 }
 
 func (c *Cart) UserID() UserID {
 	return c.userID
+}
+
+func (c *Cart) PendingOrderID() OrderID {
+	return c.pendingOrderID
 }
 
 func (c *Cart) Items() []OrderItem {
@@ -70,6 +79,26 @@ func (c *Cart) TotalPrice() int64 {
 	return totalPrice
 }
 
+func (c *Cart) EnsurePendingOrderID() OrderID {
+	if c.pendingOrderID == (OrderID{}) {
+		c.pendingOrderID = OrderID(uuid.New())
+		c.updatedAt = time.Now()
+	}
+	return c.pendingOrderID
+}
+
+func (c *Cart) AllItemsReserved() bool {
+	if len(c.items) == 0 {
+		return false
+	}
+	for _, item := range c.items {
+		if item.reservationStatus != ReservationStatusReserved {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *Cart) AddItem(item OrderItem) error {
 	index := slices.IndexFunc(c.items, func(current OrderItem) bool {
 		return current.productID == item.productID
@@ -79,8 +108,10 @@ func (c *Cart) AddItem(item OrderItem) error {
 		if err != nil {
 			return err
 		}
+		merged.reservationStatus = ReservationStatusPending
 		c.items[index] = merged
 	} else {
+		item.reservationStatus = ReservationStatusPending
 		c.items = append(c.items, item)
 	}
 
@@ -100,27 +131,69 @@ func (c *Cart) RemoveItem(productID ProductID) error {
 	c.items = slices.Delete(c.items, index, index+1)
 	c.updatedAt = time.Now()
 
+	if len(c.items) == 0 {
+		c.pendingOrderID = OrderID{}
+	}
+
 	return nil
 }
 
-func (c *Cart) Checkout(orderID OrderID, deliveryAddress string, now time.Time) (*Order, error) {
+func (c *Cart) MarkItemReserved(productID ProductID) error {
+	index := c.findItemIndex(productID)
+	if index == -1 {
+		return ErrItemNotFound
+	}
+	c.items[index].MarkReserved()
+	c.updatedAt = time.Now()
+	return nil
+}
+
+func (c *Cart) MarkItemFailed(productID ProductID) error {
+	index := c.findItemIndex(productID)
+	if index == -1 {
+		return ErrItemNotFound
+	}
+	c.items[index].MarkFailed()
+	c.updatedAt = time.Now()
+	return nil
+}
+
+func (c *Cart) Checkout(deliveryAddress string, now time.Time) (*Order, error) {
 	if len(c.items) == 0 {
 		return nil, ErrEmptyCart
 	}
+	if !c.AllItemsReserved() {
+		return nil, ErrCartNotFullyReserved
+	}
+	if c.pendingOrderID == (OrderID{}) {
+		return nil, ErrCartNotFullyReserved
+	}
 
-	return NewOrder(
-		orderID,
+	order, err := NewOrder(
+		c.pendingOrderID,
 		c.userID,
-		OrderStatusPending,
+		OrderStatusReserved,
 		PaymentID{},
 		deliveryAddress,
 		now,
 		now,
 		c.items...,
 	)
+	if err != nil {
+		return nil, err
+	}
+
+	return order, nil
 }
 
 func (c *Cart) Clear() {
 	c.items = []OrderItem{}
+	c.pendingOrderID = OrderID{}
 	c.updatedAt = time.Now()
+}
+
+func (c *Cart) findItemIndex(productID ProductID) int {
+	return slices.IndexFunc(c.items, func(current OrderItem) bool {
+		return current.productID == productID
+	})
 }

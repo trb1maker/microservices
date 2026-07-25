@@ -10,10 +10,11 @@ import (
 type ProductID uuid.UUID
 
 type OrderItem struct {
-	productID  ProductID
-	quantity   int64
-	unitPrice  int64
-	totalPrice int64
+	productID         ProductID
+	quantity          int64
+	unitPrice         int64
+	totalPrice        int64
+	reservationStatus ReservationStatus
 }
 
 var (
@@ -36,11 +37,31 @@ func NewOrderItem(productID ProductID, quantity int64, unitPrice int64) (*OrderI
 	}
 
 	return &OrderItem{
-		productID:  productID,
-		quantity:   quantity,
-		unitPrice:  unitPrice,
-		totalPrice: quantity * unitPrice,
+		productID:         productID,
+		quantity:          quantity,
+		unitPrice:         unitPrice,
+		totalPrice:        quantity * unitPrice,
+		reservationStatus: ReservationStatusPending,
 	}, nil
+}
+
+func ReconstituteOrderItem(
+	productID ProductID,
+	quantity int64,
+	unitPrice int64,
+	reservationStatus ReservationStatus,
+) (*OrderItem, error) {
+	item, err := NewOrderItem(productID, quantity, unitPrice)
+	if err != nil {
+		return nil, err
+	}
+
+	if reservationStatus == "" {
+		reservationStatus = ReservationStatusPending
+	}
+
+	item.reservationStatus = reservationStatus
+	return item, nil
 }
 
 func (i OrderItem) ProductID() ProductID {
@@ -59,6 +80,18 @@ func (i OrderItem) TotalPrice() int64 {
 	return i.totalPrice
 }
 
+func (i OrderItem) ReservationStatus() ReservationStatus {
+	return i.reservationStatus
+}
+
+func (i *OrderItem) MarkReserved() {
+	i.reservationStatus = ReservationStatusReserved
+}
+
+func (i *OrderItem) MarkFailed() {
+	i.reservationStatus = ReservationStatusFailed
+}
+
 func (i OrderItem) Merge(o OrderItem) (OrderItem, error) {
 	if i.productID != o.productID {
 		return OrderItem{}, ErrProductIDMismatch
@@ -69,11 +102,16 @@ func (i OrderItem) Merge(o OrderItem) (OrderItem, error) {
 	}
 
 	quantity := i.quantity + o.quantity
+	status := i.reservationStatus
+	if o.reservationStatus == ReservationStatusPending {
+		status = ReservationStatusPending
+	}
 
 	return OrderItem{
-		productID:  i.productID,
-		quantity:   quantity,
-		unitPrice:  i.unitPrice,
-		totalPrice: quantity * i.unitPrice,
+		productID:         i.productID,
+		quantity:          quantity,
+		unitPrice:         i.unitPrice,
+		totalPrice:        quantity * i.unitPrice,
+		reservationStatus: status,
 	}, nil
 }

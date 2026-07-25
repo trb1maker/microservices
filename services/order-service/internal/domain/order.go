@@ -15,6 +15,7 @@ var (
 	ErrPaymentIDRequired          = errors.New("paymentID is required for paid order")
 	ErrPaymentIDNotAllowed        = errors.New("paymentID is not allowed before payment")
 	ErrOrderCancellationForbidden = errors.New("order cancellation is forbidden")
+	ErrInvalidStatusTransition    = errors.New("invalid status transition")
 )
 
 type OrderID uuid.UUID
@@ -41,6 +42,7 @@ type Order struct {
 	deliveryAddress string
 	createdAt       time.Time
 	updatedAt       time.Time
+	statusHistory   []StatusHistoryEntry
 }
 
 func NewOrder(
@@ -86,7 +88,7 @@ func NewOrder(
 		}
 	}
 
-	return &Order{
+	order := &Order{
 		orderID:         orderID,
 		userID:          userID,
 		items:           items,
@@ -96,7 +98,34 @@ func NewOrder(
 		deliveryAddress: deliveryAddress,
 		createdAt:       createdAt,
 		updatedAt:       updatedAt,
-	}, nil
+		statusHistory: []StatusHistoryEntry{{
+			Status:    status,
+			CreatedAt: createdAt,
+		}},
+	}
+
+	return order, nil
+}
+
+func ReconstituteOrder(
+	orderID OrderID,
+	userID UserID,
+	status OrderStatus,
+	paymentID PaymentID,
+	deliveryAddress string,
+	createdAt time.Time,
+	updatedAt time.Time,
+	statusHistory []StatusHistoryEntry,
+	items ...OrderItem,
+) (*Order, error) {
+	order, err := NewOrder(orderID, userID, status, paymentID, deliveryAddress, createdAt, updatedAt, items...)
+	if err != nil {
+		return nil, err
+	}
+	if len(statusHistory) > 0 {
+		order.statusHistory = slices.Clone(statusHistory)
+	}
+	return order, nil
 }
 
 func (o *Order) OrderID() OrderID {
@@ -135,18 +164,61 @@ func (o *Order) UpdatedAt() time.Time {
 	return o.updatedAt
 }
 
+func (o *Order) StatusHistory() []StatusHistoryEntry {
+	return slices.Clone(o.statusHistory)
+}
+
+func (o *Order) MarkReserved(now time.Time) error {
+	if o.status != OrderStatusPending {
+		return ErrInvalidStatusTransition
+	}
+	o.status = OrderStatusReserved
+	o.updatedAt = now
+	o.appendHistory(OrderStatusReserved, "", now)
+	return nil
+}
+
+func (o *Order) MarkPaid(paymentID PaymentID, now time.Time) error {
+	if paymentID == (PaymentID{}) {
+		return ErrPaymentIDRequired
+	}
+	if o.status != OrderStatusReserved {
+		return ErrInvalidStatusTransition
+	}
+	o.status = OrderStatusPaid
+	o.paymentID = paymentID
+	o.updatedAt = now
+	o.appendHistory(OrderStatusPaid, "", now)
+	return nil
+}
+
+func (o *Order) MarkConfirmed(now time.Time) error {
+	if o.status != OrderStatusPaid {
+		return ErrInvalidStatusTransition
+	}
+	o.status = OrderStatusConfirmed
+	o.updatedAt = now
+	o.appendHistory(OrderStatusConfirmed, "", now)
+	return nil
+}
+
 func (o *Order) Cancel(now time.Time) error {
-	// Идемпотентность: повторный Cancel для CANCELLED — no-op; CONFIRMED отменить нельзя.
 	if o.status == OrderStatusConfirmed {
 		return ErrOrderCancellationForbidden
 	}
-
 	if o.status == OrderStatusCancelled {
 		return nil
 	}
-
 	o.status = OrderStatusCancelled
 	o.updatedAt = now
-
+	o.appendHistory(OrderStatusCancelled, "", now)
 	return nil
+}
+
+func (o *Order) appendHistory(status OrderStatus, reason string, at time.Time) {
+	o.statusHistory = append(o.statusHistory, StatusHistoryEntry{
+		Status:    status,
+		Reason:    reason,
+		CreatedAt: at,
+	})
 }

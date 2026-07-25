@@ -17,6 +17,8 @@ type CartService interface {
 
 type OrderService interface {
 	Checkout(ctx context.Context, userID domain.UserID, deliveryAddress string, now time.Time) (*domain.Order, error)
+	PayOrder(ctx context.Context, userID domain.UserID, orderID domain.OrderID, now time.Time) (*domain.Order, error)
+	ListOrders(ctx context.Context, userID domain.UserID, limit, offset int) ([]*domain.Order, error)
 	GetOrder(ctx context.Context, userID domain.UserID, orderID domain.OrderID) (*domain.Order, error)
 	GetOrderForService(ctx context.Context, orderID domain.OrderID) (*domain.Order, error)
 	CancelOrder(ctx context.Context, userID domain.UserID, orderID domain.OrderID, now time.Time) (*domain.Order, error)

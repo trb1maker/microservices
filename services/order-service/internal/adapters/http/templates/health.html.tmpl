@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Order Service Health</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; background: #f7f7f7; color: #222; }
+    h1 { margin-bottom: 0.25rem; }
+    .meta { color: #666; margin-bottom: 1.5rem; }
+    table { border-collapse: collapse; width: 100%; max-width: 960px; background: #fff; }
+    th, td { border: 1px solid #ddd; padding: 0.75rem; text-align: left; }
+    th { background: #efefef; }
+    .ok { color: #0a7a2f; font-weight: 600; }
+    .down { color: #b00020; font-weight: 600; }
+    .degraded { color: #9a6700; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Order Service Health</h1>
+  <div class="meta">Generated at {{ .GeneratedAt }}</div>
+  <table>
+    <thead>
+      <tr><th>Component</th><th>Status</th><th>Details</th><th>Endpoint</th></tr>
+    </thead>
+    <tbody>
+      {{ range .Items }}
+      <tr>
+        <td>{{ .Name }}</td>
+        <td class="{{ .StatusClass }}">{{ .Status }}</td>
+        <td>{{ .Detail }}</td>
+        <td>{{ .Endpoint }}</td>
+      </tr>
+      {{ end }}
+    </tbody>
+  </table>
+</body>
+</html>

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	httpSwagger "github.com/swaggo/http-swagger"
 	"github.com/trb1maker/microservices/pkg/middleware"
 )
 
@@ -48,8 +49,11 @@ func NewServer(
 	mux.HandleFunc("GET /cart", handler.GetCart)
 	mux.HandleFunc("DELETE /cart/items/{productID}", handler.RemoveCartItem)
 	mux.HandleFunc("POST /orders", handler.Checkout)
+	mux.HandleFunc("GET /orders", handler.ListOrders)
 	mux.HandleFunc("GET /orders/{id}", handler.GetOrder)
+	mux.HandleFunc("POST /orders/{id}/pay", handler.PayOrder)
 	mux.HandleFunc("DELETE /orders/{id}", handler.CancelOrder)
+	mux.HandleFunc("GET /swagger/", httpSwagger.WrapHandler)
 	mux.HandleFunc("GET /debug/error", handler.DebugError)
 
 	metricsPath := cfg.MetricsPath
@@ -87,7 +91,7 @@ func NewServer(
 func makePublicPathSkipper(metricsPath string) middleware.AuthSkip {
 	return func(r *http.Request) bool {
 		switch r.URL.Path {
-		case "/health", "/ready", metricsPath, "/auth/login":
+		case "/health", "/ready", metricsPath, "/auth/login", "/swagger/":
 			return true
 		default:
 			return false

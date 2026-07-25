@@ -13,21 +13,51 @@ type ReserveItems struct {
 }
 
 type ConfirmOrder struct {
-	OrderID string `json:"order_id"`
-	UserID  string `json:"user_id"`
+	OrderID   string `json:"order_id"`
+	UserID    string `json:"user_id"`
+	ProductID string `json:"product_id"`
+	Quantity  int    `json:"quantity"`
 }
 
 type ReleaseReservation struct {
-	UserID  string `json:"user_id"`
-	OrderID string `json:"order_id,omitempty"`
+	UserID    string `json:"user_id"`
+	OrderID   string `json:"order_id"`
+	ProductID string `json:"product_id"`
+	Quantity  int    `json:"quantity"`
 }
 
 type OrderFinalized struct {
-	OrderID string `json:"order_id"`
-	UserID  string `json:"user_id"`
+	OrderID     string `json:"order_id"`
+	UserID      string `json:"user_id"`
+	TotalAmount int64  `json:"total_amount"`
+	Status      string `json:"status"`
+	FinalizedAt string `json:"finalized_at"`
 }
 
 type OrderCancelled struct {
 	OrderID string `json:"order_id"`
 	UserID  string `json:"user_id"`
+}
+
+type ItemsReserved struct {
+	OrderID   string `json:"order_id"`
+	UserID    string `json:"user_id"`
+	ProductID string `json:"product_id"`
+	Quantity  int    `json:"quantity"`
+	Timestamp string `json:"timestamp"`
+}
+
+type ReservationFailed struct {
+	OrderID   string `json:"order_id"`
+	UserID    string `json:"user_id"`
+	ProductID string `json:"product_id"`
+	Quantity  int    `json:"quantity"`
+	Reason    string `json:"reason"`
+	Timestamp string `json:"timestamp"`
+}
+
+type OrderConfirmed struct {
+	OrderID   string `json:"order_id"`
+	UserID    string `json:"user_id"`
+	Timestamp string `json:"timestamp"`
 }

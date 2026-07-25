@@ -16,10 +16,11 @@ type OrderRepository interface {
 	Save(ctx context.Context, order *domain.Order) error
 	Delete(ctx context.Context, orderID domain.OrderID) error
 	CountActiveOrders(ctx context.Context) (int, error)
+	ListByUser(ctx context.Context, userID domain.UserID, limit, offset int) ([]*domain.Order, error)
 }
 
 type CartEventPublisher interface {
-	PublishReserveItems(ctx context.Context, event ReserveItems) error
+	PublishReserveItems(ctx context.Context, event ReserveItems, orderID string) error
 	PublishReleaseReservation(ctx context.Context, event ReleaseReservation) error
 }
 
@@ -33,6 +34,15 @@ type OrderEventPublisher interface {
 type EventPublisher interface {
 	OrderEventPublisher
 	CartEventPublisher
+}
+
+type PaymentClient interface {
+	Charge(ctx context.Context, orderID, userID string, amount int64) (transactionID string, succeeded bool, message string, err error)
+	Refund(ctx context.Context, orderID, userID string, amount int64, originalTransactionID string) (transactionID string, succeeded bool, message string, err error)
+}
+
+type StatusNotifier interface {
+	NotifyOrderStatus(order *domain.Order)
 }
 
 type OrderMetrics interface {

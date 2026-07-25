@@ -1,6 +1,9 @@
 package http
 
 import (
+	"net/http"
+	"strconv"
+
 	"github.com/trb1maker/microservices/services/order-service/internal/app"
 	"github.com/trb1maker/microservices/services/order-service/internal/domain"
 
@@ -35,4 +38,19 @@ func parseOrderID(raw string) (domain.OrderID, error) {
 
 func uuidToString[T ~[16]byte](id T) string {
 	return uuid.UUID(id).String()
+}
+
+func parsePagination(r *http.Request) (limit, offset int) {
+	limit = 20
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+			limit = value
+		}
+	}
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value >= 0 {
+			offset = value
+		}
+	}
+	return limit, offset
 }

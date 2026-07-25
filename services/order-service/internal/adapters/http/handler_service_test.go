@@ -48,6 +48,7 @@ func TestGetOrder_serviceIdentity(t *testing.T) {
 		app.NewCartService(cartRepo),
 		app.NewOrderService(cartRepo, orderRepo, app.NewNoopEventPublisher(), app.NewNoopOrderMetrics()),
 		nil,
+		nil,
 	)
 
 	req := httptest.NewRequestWithContext(

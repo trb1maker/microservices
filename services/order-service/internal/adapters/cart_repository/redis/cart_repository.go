@@ -24,16 +24,18 @@ func NewCartRepository(client *goredis.Client) *CartRepository {
 }
 
 type cartDTO struct {
-	UserID    string    `json:"user_id"`
-	Items     []itemDTO `json:"items"`
-	UpdatedAt time.Time `json:"updated_at"`
+	UserID         string    `json:"user_id"`
+	PendingOrderID string    `json:"pending_order_id,omitempty"`
+	Items          []itemDTO `json:"items"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type itemDTO struct {
-	ProductID  string `json:"product_id"`
-	Quantity   int64  `json:"quantity"`
-	UnitPrice  int64  `json:"unit_price"`
-	TotalPrice int64  `json:"total_price"`
+	ProductID         string `json:"product_id"`
+	Quantity          int64  `json:"quantity"`
+	UnitPrice         int64  `json:"unit_price"`
+	TotalPrice        int64  `json:"total_price"`
+	ReservationStatus string `json:"reservation_status"`
 }
 
 func (r *CartRepository) Get(ctx context.Context, userID domain.UserID) (*domain.Cart, error) {
@@ -80,7 +82,6 @@ func (r *CartRepository) Ping(ctx context.Context) error {
 	if err := r.client.Ping(ctx).Err(); err != nil {
 		return fmt.Errorf("ping redis: %w", err)
 	}
-
 	return nil
 }
 
@@ -92,24 +93,38 @@ func toDTO(cart *domain.Cart) cartDTO {
 	items := make([]itemDTO, 0, len(cart.Items()))
 	for _, item := range cart.Items() {
 		items = append(items, itemDTO{
-			ProductID:  uuid.UUID(item.ProductID()).String(),
-			Quantity:   item.Quantity(),
-			UnitPrice:  item.UnitPrice(),
-			TotalPrice: item.TotalPrice(),
+			ProductID:         uuid.UUID(item.ProductID()).String(),
+			Quantity:          item.Quantity(),
+			UnitPrice:         item.UnitPrice(),
+			TotalPrice:        item.TotalPrice(),
+			ReservationStatus: string(item.ReservationStatus()),
 		})
 	}
 
-	return cartDTO{
+	dto := cartDTO{
 		UserID:    uuid.UUID(cart.UserID()).String(),
 		Items:     items,
 		UpdatedAt: cart.UpdatedAt(),
 	}
+	if cart.PendingOrderID() != (domain.OrderID{}) {
+		dto.PendingOrderID = uuid.UUID(cart.PendingOrderID()).String()
+	}
+	return dto
 }
 
 func fromDTO(dto cartDTO) (*domain.Cart, error) {
 	userID, err := uuid.Parse(dto.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("parse user id: %w", err)
+	}
+
+	var pendingOrderID domain.OrderID
+	if dto.PendingOrderID != "" {
+		parsed, err := uuid.Parse(dto.PendingOrderID)
+		if err != nil {
+			return nil, fmt.Errorf("parse pending order id: %w", err)
+		}
+		pendingOrderID = domain.OrderID(parsed)
 	}
 
 	items := make([]domain.OrderItem, 0, len(dto.Items))
@@ -119,7 +134,12 @@ func fromDTO(dto cartDTO) (*domain.Cart, error) {
 			return nil, fmt.Errorf("parse product id: %w", err)
 		}
 
-		item, err := domain.NewOrderItem(domain.ProductID(productID), itemDTO.Quantity, itemDTO.UnitPrice)
+		item, err := domain.ReconstituteOrderItem(
+			domain.ProductID(productID),
+			itemDTO.Quantity,
+			itemDTO.UnitPrice,
+			domain.ReservationStatus(itemDTO.ReservationStatus),
+		)
 		if err != nil {
 			return nil, fmt.Errorf("build item: %w", err)
 		}
@@ -127,7 +147,7 @@ func fromDTO(dto cartDTO) (*domain.Cart, error) {
 		items = append(items, *item)
 	}
 
-	cart, err := domain.ReconstituteCart(domain.UserID(userID), dto.UpdatedAt, items...)
+	cart, err := domain.ReconstituteCart(domain.UserID(userID), pendingOrderID, dto.UpdatedAt, items...)
 	if err != nil {
 		return nil, fmt.Errorf("build cart: %w", err)
 	}

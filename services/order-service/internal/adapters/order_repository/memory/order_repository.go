@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/trb1maker/microservices/services/order-service/internal/domain"
@@ -29,6 +30,34 @@ func (r *OrderRepository) Get(_ context.Context, orderID domain.OrderID) (*domai
 	}
 
 	return cloneOrder(order)
+}
+
+func (r *OrderRepository) ListByUser(_ context.Context, userID domain.UserID, limit, offset int) ([]*domain.Order, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	orders := make([]*domain.Order, 0)
+	for _, order := range r.orders {
+		if order.UserID() != userID {
+			continue
+		}
+		cloned, err := cloneOrder(order)
+		if err != nil {
+			return nil, err
+		}
+		orders = append(orders, cloned)
+	}
+	slices.SortFunc(orders, func(a, b *domain.Order) int {
+		return b.CreatedAt().Compare(a.CreatedAt())
+	})
+	if offset >= len(orders) {
+		return []*domain.Order{}, nil
+	}
+	orders = orders[offset:]
+	if limit < len(orders) {
+		orders = orders[:limit]
+	}
+	return orders, nil
 }
 
 func (r *OrderRepository) Save(_ context.Context, order *domain.Order) error {
@@ -70,7 +99,7 @@ func (r *OrderRepository) CountActiveOrders(_ context.Context) (int, error) {
 }
 
 func cloneOrder(order *domain.Order) (*domain.Order, error) {
-	cloned, err := domain.NewOrder(
+	cloned, err := domain.ReconstituteOrder(
 		order.OrderID(),
 		order.UserID(),
 		order.Status(),
@@ -78,6 +107,7 @@ func cloneOrder(order *domain.Order) (*domain.Order, error) {
 		order.DeliveryAddress(),
 		order.CreatedAt(),
 		order.UpdatedAt(),
+		order.StatusHistory(),
 		order.Items()...,
 	)
 	if err != nil {
