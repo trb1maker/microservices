@@ -40,6 +40,7 @@ linters:
 
     # quality
     - copyloopvar
+    - depguard
     - gocritic
     - gosec
     - misspell
@@ -53,6 +54,48 @@ linters:
     - tparallel
 
   settings:
+    depguard:
+      rules:
+        deprecated:
+          files:
+            - $all
+          deny:
+            - pkg: "log$"
+              desc: Use log/slog
+            - pkg: "math/rand$"
+              desc: Use math/rand/v2
+        domain:
+          files:
+            - "**/internal/domain/**/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/google/uuid
+        application:
+          files:
+            - "**/internal/app/**/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: github.com/trb1maker/microservices/services/*/internal/adapters/**
+              desc: application layer must not depend on adapters
+            - pkg: github.com/trb1maker/microservices/services/*/cmd/**
+              desc: application layer must not depend on the composition root
+        adapters:
+          files:
+            - "**/internal/adapters/**/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: github.com/trb1maker/microservices/services/*/internal/app/**
+              desc: adapters layer must not depend on the application layer
+            - pkg: github.com/trb1maker/microservices/services/*/cmd/**
+              desc: adapters layer must not depend on the composition root
+        shared:
+          files:
+            - "pkg/**/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: github.com/trb1maker/microservices/services/**
+              desc: shared pkg must not depend on services
     funlen:
       lines: 80
       statements: 50
@@ -70,6 +113,13 @@ linters:
         linters:
           - funlen
           - gocognit
+      - path: internal/integration/
+        linters:
+          - goconst
+          - mnd
+      - path: internal/adapters/mongodb/repository\.go
+        linters:
+          - mnd
 
 formatters:
   enable:
