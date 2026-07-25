@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       services: ${{ steps.services.outputs.services }}
+      e2e: ${{ steps.e2e.outputs.e2e }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,7 +53,7 @@ jobs:
                 shared_changed=true
                 break
                 ;;
-              pkg/*)
+              pkg/*|api/*)
                 shared_changed=true
                 break
                 ;;
@@ -83,6 +84,45 @@ jobs:
 
           services_json=$(printf '%s\n' "${affected[@]}" | jq -R . | jq -s -c .)
           echo "services=$services_json" >> "$GITHUB_OUTPUT"
+
+      - name: Detect E2E changes
+        id: e2e
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "e2e=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base_ref="${{ github.base_ref }}"
+          git fetch origin "${base_ref}" --depth=1
+          changed_files=$(git diff --name-only "origin/${base_ref}"...HEAD)
+
+          e2e_changed=false
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            case "$file" in
+              tests/e2e/*|pkg/*|api/*|go.work|go.work.sum|Taskfile.yml|docker-compose.yml|.github/workflows/*)
+                e2e_changed=true
+                break
+                ;;
+            esac
+          done <<< "$changed_files"
+
+          if [ "$e2e_changed" = true ]; then
+            echo "e2e=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          while IFS= read -r service; do
+            [ -z "$service" ] && continue
+            if echo "$changed_files" | grep -qE "^services/${service}/"; then
+              echo "e2e=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done < <(find services -mindepth 2 -maxdepth 2 -name go.mod -exec dirname {} \; | xargs -n1 basename | sort -u)
+
+          echo "e2e=false" >> "$GITHUB_OUTPUT"
 
   ci:
     runs-on: ubuntu-latest
@@ -173,3 +213,20 @@ jobs:
           docker tag ${{ matrix.service }}:ci "${image}:latest"
           docker push "${image}:${{ github.sha }}"
           docker push "${image}:latest"
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            tests/e2e/go.sum
+            go.work.sum
+
+      - name: E2E tests
+        run: go test -tags=integration -timeout 15m ./tests/e2e/...
