@@ -13,10 +13,13 @@ import (
 
 	cartmemory "github.com/trb1maker/microservices/services/order-service/internal/adapters/cart_repository/memory"
 	cartredis "github.com/trb1maker/microservices/services/order-service/internal/adapters/cart_repository/redis"
+	natsconsumer "github.com/trb1maker/microservices/services/order-service/internal/adapters/event_consumer/nats"
 	natsadapter "github.com/trb1maker/microservices/services/order-service/internal/adapters/event_publisher/nats"
+	grpcadapter "github.com/trb1maker/microservices/services/order-service/internal/adapters/grpc"
 	httpadapter "github.com/trb1maker/microservices/services/order-service/internal/adapters/http"
 	ordermemory "github.com/trb1maker/microservices/services/order-service/internal/adapters/order_repository/memory"
 	orderpostgres "github.com/trb1maker/microservices/services/order-service/internal/adapters/order_repository/postgres"
+	paymentgrpc "github.com/trb1maker/microservices/services/order-service/internal/adapters/payment/grpc"
 	userpostgres "github.com/trb1maker/microservices/services/order-service/internal/adapters/user_repository/postgres"
 	"github.com/trb1maker/microservices/services/order-service/internal/app"
 	"github.com/trb1maker/microservices/services/order-service/internal/config"
@@ -33,7 +36,17 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/nats-io/nats.go"
 	goredis "github.com/redis/go-redis/v9"
+
+	_ "github.com/trb1maker/microservices/services/order-service/docs/swagger"
 )
+
+// @title           Order Service API
+// @version         1.0
+// @description     REST API for cart, checkout, and order management.
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Type "Bearer" followed by a space and JWT token.
 
 const shutdownTimeout = 10 * time.Second
 
@@ -44,6 +57,7 @@ func main() {
 	}
 }
 
+//nolint:funlen // Composition root intentionally keeps lifecycle together.
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -66,17 +80,37 @@ func run() error {
 
 	appMetrics := metrics.New(cfg.MetricsPath)
 
-	cartRepo, orderRepo, events, readiness, authService, cleanup, err := buildDependencies(ctx, cfg, logger)
+	deps, cleanup, err := buildDependencies(ctx, cfg, logger)
 	if err != nil {
 		return fmt.Errorf("build dependencies: %w", err)
 	}
 	defer cleanup()
 
-	startActiveOrdersRefresh(ctx, cfg, appMetrics, orderRepo, logger)
+	startActiveOrdersRefresh(ctx, cfg, appMetrics, deps.orderRepo, logger)
 
-	server, err := newHTTPServer(cfg, cartRepo, orderRepo, events, readiness, authService, appMetrics)
+	server, err := newHTTPServer(cfg, deps, appMetrics)
 	if err != nil {
 		return err
+	}
+
+	var grpcServer *grpcadapter.Server
+	if !cfg.UseMemory {
+		grpcServer, err = grpcadapter.NewServer(grpcadapter.ServerConfig{
+			Addr:         cfg.GRPCAddr,
+			CertFile:     cfg.TLSCertFile,
+			KeyFile:      cfg.TLSKeyFile,
+			ClientCAFile: cfg.TLSClientCAFile,
+		}, deps.orderService, deps.statusHub)
+		if err != nil {
+			return fmt.Errorf("create grpc server: %w", err)
+		}
+
+		go func() {
+			logger.Info("grpc server started", slog.String("addr", cfg.GRPCAddr))
+			if serveErr := grpcServer.Serve(); serveErr != nil {
+				logger.Error("grpc server failed", slog.Any("error", serveErr))
+			}
+		}()
 	}
 
 	serverErr := make(chan error, 1)
@@ -99,6 +133,10 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
+	if grpcServer != nil {
+		grpcServer.GracefulStop()
+	}
+
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("server shutdown: %w", err)
 	}
@@ -111,18 +149,30 @@ func run() error {
 	return nil
 }
 
-func newHTTPServer(
-	cfg *config.Config,
-	cartRepo app.CartRepository,
-	orderRepo app.OrderRepository,
-	events app.EventPublisher,
-	readiness *health.Checker,
-	authService *app.AuthService,
-	appMetrics *metrics.Metrics,
-) (*http.Server, error) {
-	cartService := app.NewCartService(cartRepo)
-	orderService := app.NewOrderService(cartRepo, orderRepo, events, appMetrics)
-	handler := httpadapter.NewHandler(cartService, orderService, readiness)
+type dependencies struct {
+	cartRepo      app.CartRepository
+	orderRepo     app.OrderRepository
+	events        app.EventPublisher
+	readiness     *health.Checker
+	authService   *app.AuthService
+	cartService   *app.CartService
+	orderService  *app.OrderService
+	statusHub     *grpcadapter.StatusHub
+	natsConsumer  *natsconsumer.Consumer
+	paymentClient *paymentgrpc.PaymentClient
+}
+
+func newHTTPServer(cfg *config.Config, deps *dependencies, appMetrics *metrics.Metrics) (*http.Server, error) {
+	var remoteChecker httpadapter.RemoteHealthChecker
+	if !cfg.UseMemory && deps.paymentClient != nil {
+		remoteChecker = httpadapter.NewHTTPRemoteChecker(cfg.StoreHealthURL, deps.paymentClient)
+	}
+	dashboard, err := httpadapter.NewStatusDashboard(deps.readiness, remoteChecker)
+	if err != nil {
+		return nil, fmt.Errorf("create status dashboard: %w", err)
+	}
+
+	handler := httpadapter.NewHandler(deps.cartService, deps.orderService, deps.readiness, dashboard)
 
 	serviceCAs, err := tlsutil.LoadClientCAPool(cfg.TLSClientCAFile)
 	if err != nil {
@@ -130,8 +180,8 @@ func newHTTPServer(
 	}
 
 	var authHandler httpadapter.AuthService
-	if authService != nil {
-		authHandler = httpadapter.NewAppAuthAdapter(authService)
+	if deps.authService != nil {
+		authHandler = httpadapter.NewAppAuthAdapter(deps.authService)
 	}
 
 	server := httpadapter.NewServer(httpadapter.ServerConfig{
@@ -154,43 +204,58 @@ func newHTTPServer(
 	return server, nil
 }
 
+//nolint:funlen // Dependency construction includes cleanup for every resource.
 func buildDependencies(
 	ctx context.Context,
 	cfg *config.Config,
 	logger *slog.Logger,
-) (app.CartRepository, app.OrderRepository, app.EventPublisher, *health.Checker, *app.AuthService, func(), error) {
+) (*dependencies, func(), error) {
 	if cfg.UseMemory {
 		logger.Info("using in-memory repositories")
-		return cartmemory.NewCartRepository(), ordermemory.NewOrderRepository(), app.NewNoopEventPublisher(), health.NewChecker(nil), nil, func() {}, nil
+		cartRepo := cartmemory.NewCartRepository()
+		orderRepo := ordermemory.NewOrderRepository()
+		events := app.NewNoopEventPublisher()
+		statusHub := grpcadapter.NewStatusHub()
+		cartService := app.NewCartService(cartRepo, events)
+		orderService := app.NewOrderService(cartRepo, orderRepo, events, statusHub, app.NewNoopOrderMetrics())
+		return &dependencies{
+			cartRepo:     cartRepo,
+			orderRepo:    orderRepo,
+			events:       events,
+			readiness:    health.NewChecker(nil),
+			cartService:  cartService,
+			orderService: orderService,
+			statusHub:    statusHub,
+		}, func() {}, nil
 	}
 
 	if cfg.DatabaseURL == "" {
-		return nil, nil, nil, nil, nil, nil, errConfig("DATABASE_URL is required when USE_MEMORY=false")
+		return nil, nil, errConfig("DATABASE_URL is required when USE_MEMORY=false")
 	}
 
 	pool, err := newPostgresPool(ctx, cfg.DatabaseURL)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	db := stdlib.OpenDBFromPool(pool)
 	if err := migrations.Up(db); err != nil {
 		closePostgres(db, pool)
-		return nil, nil, nil, nil, nil, nil, fmt.Errorf("migrate postgres: %w", err)
+		return nil, nil, fmt.Errorf("migrate postgres: %w", err)
 	}
 
 	redisClient := goredis.NewClient(&goredis.Options{Addr: cfg.RedisAddr})
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		closePostgres(db, pool)
 		_ = redisClient.Close()
-		return nil, nil, nil, nil, nil, nil, fmt.Errorf("connect redis: %w", err)
+		return nil, nil, fmt.Errorf("connect redis: %w", err)
 	}
 
 	natsConn, err := connectNATS(cfg)
 	if err != nil {
 		closePostgres(db, pool)
 		_ = redisClient.Close()
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	orderRepo := orderpostgres.NewOrderRepository(pool)
@@ -206,6 +271,38 @@ func buildDependencies(
 		OrderCancelled:     cfg.OrderCancelledSubject,
 	})
 
+	statusHub := grpcadapter.NewStatusHub()
+
+	paymentClient, err := paymentgrpc.NewPaymentClient(ctx, paymentgrpc.ClientConfig{
+		Addr:       cfg.PaymentGRPCAddr,
+		CertFile:   cfg.NATSTLSCertFile,
+		KeyFile:    cfg.NATSTLSKeyFile,
+		CAFile:     cfg.NATSTLSCAFile,
+		ServerName: "payment-service",
+	})
+	if err != nil {
+		natsConn.Close()
+		closePostgres(db, pool)
+		_ = redisClient.Close()
+		return nil, nil, fmt.Errorf("connect payment service: %w", err)
+	}
+
+	cartService := app.NewCartService(cartRepo, events)
+	orderService := app.NewOrderService(cartRepo, orderRepo, events, paymentClient, statusHub, app.NewNoopOrderMetrics())
+
+	consumer := natsconsumer.NewConsumer(natsConn, natsconsumer.Subjects{
+		ItemsReserved:     cfg.ItemsReservedSubject,
+		ReservationFailed: cfg.ReservationFailedSubject,
+		OrderConfirmed:    cfg.OrderConfirmedSubject,
+	}, cartService, orderService)
+	if err := consumer.Start(); err != nil {
+		_ = paymentClient.Close()
+		natsConn.Close()
+		closePostgres(db, pool)
+		_ = redisClient.Close()
+		return nil, nil, fmt.Errorf("start nats consumer: %w", err)
+	}
+
 	checks := map[string]health.CheckFunc{
 		"postgres": orderRepo.Ping,
 		"redis":    cartRepo.Ping,
@@ -218,12 +315,25 @@ func buildDependencies(
 	}
 
 	cleanup := func() {
+		consumer.Close()
+		_ = paymentClient.Close()
 		natsConn.Close()
 		_ = redisClient.Close()
 		closePostgres(db, pool)
 	}
 
-	return cartRepo, orderRepo, events, health.NewChecker(checks), authService, cleanup, nil
+	return &dependencies{
+		cartRepo:      cartRepo,
+		orderRepo:     orderRepo,
+		events:        events,
+		readiness:     health.NewChecker(checks),
+		authService:   authService,
+		cartService:   cartService,
+		orderService:  orderService,
+		statusHub:     statusHub,
+		natsConsumer:  consumer,
+		paymentClient: paymentClient,
+	}, cleanup, nil
 }
 
 func connectNATS(cfg *config.Config) (*nats.Conn, error) {

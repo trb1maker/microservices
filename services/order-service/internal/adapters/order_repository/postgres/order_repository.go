@@ -42,7 +42,46 @@ func (r *OrderRepository) Get(ctx context.Context, orderID domain.OrderID) (*dom
 		return nil, err
 	}
 
-	return buildOrder(orderID, row, items)
+	history, err := r.fetchStatusHistory(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+
+	return buildOrder(orderID, row, history, items)
+}
+
+func (r *OrderRepository) ListByUser(ctx context.Context, userID domain.UserID, limit, offset int) ([]*domain.Order, error) {
+	const query = `
+		SELECT order_id
+		FROM orders
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3`
+
+	rows, err := r.pool.Query(ctx, query, uuid.UUID(userID), limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("query orders by user: %w", err)
+	}
+	defer rows.Close()
+
+	orders := make([]*domain.Order, 0)
+	for rows.Next() {
+		var orderID uuid.UUID
+		if err := rows.Scan(&orderID); err != nil {
+			return nil, fmt.Errorf("scan order id: %w", err)
+		}
+		order, err := r.Get(ctx, domain.OrderID(orderID))
+		if err != nil {
+			return nil, err
+		}
+		if order != nil {
+			orders = append(orders, order)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate orders: %w", err)
+	}
+	return orders, nil
 }
 
 func (r *OrderRepository) fetchOrderRow(ctx context.Context, orderID domain.OrderID) (*orderRow, error) {
@@ -92,9 +131,9 @@ func (r *OrderRepository) fetchOrderItems(ctx context.Context, orderID domain.Or
 			productID uuid.UUID
 			quantity  int64
 			unitPrice int64
-			itemTotal int64
 		)
 
+		var itemTotal int64
 		if err := rows.Scan(&productID, &quantity, &unitPrice, &itemTotal); err != nil {
 			return nil, fmt.Errorf("scan order item: %w", err)
 		}
@@ -103,7 +142,7 @@ func (r *OrderRepository) fetchOrderItems(ctx context.Context, orderID domain.Or
 		if err != nil {
 			return nil, fmt.Errorf("build order item: %w", err)
 		}
-
+		item.MarkReserved()
 		items = append(items, *item)
 	}
 
@@ -114,13 +153,40 @@ func (r *OrderRepository) fetchOrderItems(ctx context.Context, orderID domain.Or
 	return items, nil
 }
 
-func buildOrder(orderID domain.OrderID, row *orderRow, items []domain.OrderItem) (*domain.Order, error) {
+func (r *OrderRepository) fetchStatusHistory(ctx context.Context, orderID domain.OrderID) ([]domain.StatusHistoryEntry, error) {
+	const query = `
+		SELECT status, reason, created_at
+		FROM order_status_history
+		WHERE order_id = $1
+		ORDER BY created_at ASC, id ASC`
+
+	rows, err := r.pool.Query(ctx, query, uuid.UUID(orderID))
+	if err != nil {
+		return nil, fmt.Errorf("query status history: %w", err)
+	}
+	defer rows.Close()
+
+	history := make([]domain.StatusHistoryEntry, 0)
+	for rows.Next() {
+		var entry domain.StatusHistoryEntry
+		if err := rows.Scan(&entry.Status, &entry.Reason, &entry.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan status history: %w", err)
+		}
+		history = append(history, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate status history: %w", err)
+	}
+	return history, nil
+}
+
+func buildOrder(orderID domain.OrderID, row *orderRow, history []domain.StatusHistoryEntry, items []domain.OrderItem) (*domain.Order, error) {
 	var payment domain.PaymentID
 	if row.paymentID != nil {
 		payment = domain.PaymentID(*row.paymentID)
 	}
 
-	order, err := domain.NewOrder(
+	order, err := domain.ReconstituteOrder(
 		orderID,
 		domain.UserID(row.userID),
 		domain.OrderStatus(row.status),
@@ -128,15 +194,16 @@ func buildOrder(orderID domain.OrderID, row *orderRow, items []domain.OrderItem)
 		row.deliveryAddress,
 		row.createdAt,
 		row.updatedAt,
+		history,
 		items...,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("build order: %w", err)
+		return nil, fmt.Errorf("reconstitute order: %w", err)
 	}
-
 	return order, nil
 }
 
+//nolint:funlen // A single transaction keeps order and history consistent.
 func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -200,6 +267,26 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 		}
 	}
 
+	const deleteHistory = `DELETE FROM order_status_history WHERE order_id = $1`
+	if _, err := tx.Exec(ctx, deleteHistory, uuid.UUID(order.OrderID())); err != nil {
+		return fmt.Errorf("delete status history: %w", err)
+	}
+
+	const insertHistory = `
+		INSERT INTO order_status_history (order_id, status, reason, created_at)
+		VALUES ($1, $2, $3, $4)`
+
+	for _, entry := range order.StatusHistory() {
+		if _, err := tx.Exec(ctx, insertHistory,
+			uuid.UUID(order.OrderID()),
+			string(entry.Status),
+			entry.Reason,
+			entry.CreatedAt,
+		); err != nil {
+			return fmt.Errorf("insert status history: %w", err)
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit tx: %w", err)
 	}
@@ -213,6 +300,11 @@ func (r *OrderRepository) Delete(ctx context.Context, orderID domain.OrderID) er
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	const deleteHistory = `DELETE FROM order_status_history WHERE order_id = $1`
+	if _, err := tx.Exec(ctx, deleteHistory, uuid.UUID(orderID)); err != nil {
+		return fmt.Errorf("delete status history: %w", err)
+	}
 
 	const deleteItems = `DELETE FROM order_items WHERE order_id = $1`
 	if _, err := tx.Exec(ctx, deleteItems, uuid.UUID(orderID)); err != nil {
@@ -235,12 +327,10 @@ func (r *OrderRepository) Ping(ctx context.Context) error {
 	if err := r.pool.Ping(ctx); err != nil {
 		return fmt.Errorf("ping postgres: %w", err)
 	}
-
 	return nil
 }
 
 func (r *OrderRepository) CountActiveOrders(ctx context.Context) (int, error) {
-	// «Активные» заказы — все, кроме CONFIRMED и CANCELLED; логика должна совпадать с memory-репозиторием.
 	const query = `
 		SELECT COUNT(*)
 		FROM orders
@@ -250,6 +340,5 @@ func (r *OrderRepository) CountActiveOrders(ctx context.Context) (int, error) {
 	if err := r.pool.QueryRow(ctx, query).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count active orders: %w", err)
 	}
-
 	return count, nil
 }

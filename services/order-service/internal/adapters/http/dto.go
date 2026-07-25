@@ -46,8 +46,13 @@ func mapError(err error) (int, string) {
 		errors.Is(err, app.ErrOrderNotFound):
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, domain.ErrEmptyCart),
+		errors.Is(err, domain.ErrCartNotFullyReserved),
 		errors.Is(err, domain.ErrOrderCancellationForbidden):
 		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, app.ErrOrderNotPayable):
+		return http.StatusConflict, err.Error()
+	case errors.Is(err, app.ErrPaymentFailed):
+		return http.StatusPaymentRequired, err.Error()
 	default:
 		var syntaxErr *json.SyntaxError
 		if errors.As(err, &syntaxErr) {
@@ -118,6 +123,10 @@ type orderResponse struct {
 	UpdatedAt       string              `json:"updated_at"`
 }
 
+type ordersListResponse struct {
+	Orders []orderResponse `json:"orders"`
+}
+
 func toCartResponse(cart *domain.Cart) cartResponse {
 	items := make([]cartItemResponse, 0, len(cart.Items()))
 	for _, item := range cart.Items() {
@@ -135,6 +144,14 @@ func toCartResponse(cart *domain.Cart) cartResponse {
 		TotalPrice: cart.TotalPrice(),
 		UpdatedAt:  cart.UpdatedAt().UTC().Format(timeRFC3339),
 	}
+}
+
+func toOrdersListResponse(orders []*domain.Order) ordersListResponse {
+	items := make([]orderResponse, 0, len(orders))
+	for _, order := range orders {
+		items = append(items, toOrderResponse(order))
+	}
+	return ordersListResponse{Orders: items}
 }
 
 func toOrderResponse(order *domain.Order) orderResponse {

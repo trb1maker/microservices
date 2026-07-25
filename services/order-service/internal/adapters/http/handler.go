@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/trb1maker/microservices/services/order-service/internal/domain"
@@ -12,19 +13,24 @@ type Handler struct {
 	carts     CartService
 	orders    OrderService
 	readiness ReadinessChecker
+	dashboard *StatusDashboard
 }
 
-func NewHandler(carts CartService, orders OrderService, readiness ReadinessChecker) *Handler {
-	return &Handler{carts: carts, orders: orders, readiness: readiness}
+func NewHandler(carts CartService, orders OrderService, readiness ReadinessChecker, dashboard *StatusDashboard) *Handler {
+	return &Handler{carts: carts, orders: orders, readiness: readiness, dashboard: dashboard}
 }
 
-func (h *Handler) Health(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
+	if strings.Contains(r.Header.Get("Accept"), "text/html") && h.dashboard != nil {
+		h.dashboard.RenderHTML(w, h.dashboard.Build(r.Context()))
+		return
+	}
 	writeJSON(w, http.StatusOK, healthResponse{Status: "ok"})
 }
 
 func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
 	if h.readiness == nil {
-		writeJSON(w, http.StatusOK, readyResponse{Status: "ready", Checks: map[string]string{}})
+		writeJSON(w, http.StatusOK, readyResponse{Status: statusReady, Checks: map[string]string{}})
 		return
 	}
 
@@ -34,7 +40,7 @@ func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, readyResponse{Status: "ready", Checks: checks})
+	writeJSON(w, http.StatusOK, readyResponse{Status: statusReady, Checks: checks})
 }
 
 func (h *Handler) AddCartItem(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +135,67 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, toOrderResponse(order))
+}
+
+// ListOrders godoc
+// @Summary      List user orders
+// @Tags         orders
+// @Produce      json
+// @Param        limit   query int false "Page size"
+// @Param        offset  query int false "Page offset"
+// @Success      200 {object} ordersListResponse
+// @Failure      401 {object} errorResponse
+// @Security     BearerAuth
+// @Router       /orders [get]
+func (h *Handler) ListOrders(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromRequest(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	limit, offset := parsePagination(r)
+
+	orders, err := h.orders.ListOrders(r.Context(), userID, limit, offset)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toOrdersListResponse(orders))
+}
+
+// PayOrder godoc
+// @Summary      Pay for a reserved order
+// @Tags         orders
+// @Produce      json
+// @Param        id path string true "Order ID"
+// @Success      200 {object} orderResponse
+// @Failure      402 {object} errorResponse
+// @Failure      404 {object} errorResponse
+// @Failure      409 {object} errorResponse
+// @Security     BearerAuth
+// @Router       /orders/{id}/pay [post]
+func (h *Handler) PayOrder(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromRequest(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	orderID, err := parseOrderID(r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	order, err := h.orders.PayOrder(r.Context(), userID, orderID, time.Now())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toOrderResponse(order))
 }
 
 func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {

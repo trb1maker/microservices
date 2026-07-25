@@ -29,7 +29,7 @@ type recordingEventPublisher struct {
 	releaseReservation []ReleaseReservation
 }
 
-func (p *recordingEventPublisher) PublishReserveItems(context.Context, ReserveItems) error {
+func (p *recordingEventPublisher) PublishReserveItems(context.Context, ReserveItems, string) error {
 	return nil
 }
 
@@ -80,6 +80,8 @@ func setupOrderService(t *testing.T, events EventPublisher) (*OrderService, doma
 
 	cart, err := domain.NewCart(userID, *item)
 	require.NoError(t, err)
+	cart.EnsurePendingOrderID()
+	require.NoError(t, cart.MarkItemReserved(item.ProductID()))
 	require.NoError(t, cartRepo.Save(t.Context(), cart))
 
 	return NewOrderService(cartRepo, orderRepo, events, NewNoopOrderMetrics()), userID
@@ -96,7 +98,7 @@ func TestOrderService_Checkout_happyPath(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, order)
 	assert.Equal(t, "Moscow", order.DeliveryAddress())
-	assert.Equal(t, domain.OrderStatusPending, order.Status())
+	assert.Equal(t, domain.OrderStatusReserved, order.Status())
 
 	cart, err := service.carts.Get(t.Context(), userID)
 	require.NoError(t, err)
@@ -240,6 +242,18 @@ func (r *failingDeleteOrderRepo) Save(ctx context.Context, order *domain.Order) 
 	return nil
 }
 
+func (r *failingDeleteOrderRepo) ListByUser(
+	ctx context.Context,
+	userID domain.UserID,
+	limit, offset int,
+) ([]*domain.Order, error) {
+	orders, err := r.inner.ListByUser(ctx, userID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list orders: %w", err)
+	}
+	return orders, nil
+}
+
 func (r *failingDeleteOrderRepo) Delete(_ context.Context, _ domain.OrderID) error {
 	return r.deleteErr
 }
@@ -268,6 +282,8 @@ func TestOrderService_Checkout_publishFailureWithRollbackFailure(t *testing.T) {
 
 	cart, err := domain.NewCart(userID, *item)
 	require.NoError(t, err)
+	cart.EnsurePendingOrderID()
+	require.NoError(t, cart.MarkItemReserved(item.ProductID()))
 	require.NoError(t, cartRepo.Save(t.Context(), cart))
 
 	service := NewOrderService(
@@ -312,6 +328,8 @@ func TestOrderService_Checkout_updatesActiveOrdersMetric(t *testing.T) {
 
 	cart, err := domain.NewCart(userID, *item)
 	require.NoError(t, err)
+	cart.EnsurePendingOrderID()
+	require.NoError(t, cart.MarkItemReserved(item.ProductID()))
 	require.NoError(t, cartRepo.Save(t.Context(), cart))
 
 	service := NewOrderService(cartRepo, orderRepo, events, metrics)

@@ -235,7 +235,7 @@ func TestReconstituteCart(t *testing.T) {
 	item := mustOrderItem(t, ProductID(uuid.New()), 1, 100)
 	updatedAt := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
-	cart, err := ReconstituteCart(userID, updatedAt, item)
+	cart, err := ReconstituteCart(userID, OrderID{}, updatedAt, item)
 	require.NoError(t, err)
 	require.NotNil(t, cart)
 	assert.Equal(t, userID, cart.UserID())
@@ -247,26 +247,27 @@ func TestCart_Checkout(t *testing.T) {
 	t.Parallel()
 
 	userID := UserID(uuid.New())
-	orderID := OrderID(uuid.New())
 	now := time.Now()
 
-	t.Run("creates pending order from non-empty cart", func(t *testing.T) {
+	t.Run("creates reserved order from fully reserved cart", func(t *testing.T) {
 		t.Parallel()
 
 		item := mustOrderItem(t, ProductID(uuid.New()), 1, 100)
 		cart, err := NewCart(userID, item)
 		require.NoError(t, err)
+		cart.EnsurePendingOrderID()
+		require.NoError(t, cart.MarkItemReserved(item.ProductID()))
 
-		order, err := cart.Checkout(orderID, "Moscow, Red Square 1", now)
+		order, err := cart.Checkout("Moscow, Red Square 1", now)
 		require.NoError(t, err)
 		require.NotNil(t, order)
-		assert.Equal(t, orderID, order.OrderID())
+		assert.Equal(t, cart.PendingOrderID(), order.OrderID())
 		assert.Equal(t, userID, order.UserID())
-		assert.Equal(t, OrderStatusPending, order.Status())
+		assert.Equal(t, OrderStatusReserved, order.Status())
 		assert.Equal(t, PaymentID{}, order.PaymentID())
 		assert.Equal(t, "Moscow, Red Square 1", order.DeliveryAddress())
 		assert.Equal(t, int64(100), order.TotalPrice())
-		assert.Equal(t, []OrderItem{item}, order.Items())
+		assert.Equal(t, cart.Items(), order.Items())
 		assert.Equal(t, now, order.CreatedAt())
 		assert.Equal(t, now, order.UpdatedAt())
 	})
@@ -277,7 +278,7 @@ func TestCart_Checkout(t *testing.T) {
 		cart, err := NewCart(userID)
 		require.NoError(t, err)
 
-		order, err := cart.Checkout(orderID, "Moscow", now)
+		order, err := cart.Checkout("Moscow", now)
 		require.ErrorIs(t, err, ErrEmptyCart)
 		assert.Nil(t, order)
 	})

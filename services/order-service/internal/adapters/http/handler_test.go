@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -58,14 +59,32 @@ func newTestServer(t *testing.T) *httptest.Server {
 
 	cartRepo := cartmemory.NewCartRepository()
 	orderRepo := ordermemory.NewOrderRepository()
-	cartService := app.NewCartService(cartRepo)
-	orderService := app.NewOrderService(cartRepo, orderRepo, app.NewNoopEventPublisher(), app.NewNoopOrderMetrics())
-	handler := httpadapter.NewHandler(cartService, orderService, nil)
+	publisher := &autoReservePublisher{}
+	cartService := app.NewCartService(cartRepo, publisher)
+	publisher.carts = cartService
+	orderService := app.NewOrderService(cartRepo, orderRepo, publisher, app.NewNoopOrderMetrics())
+	handler := httpadapter.NewHandler(cartService, orderService, nil, nil)
 
 	return httptest.NewServer(httpadapter.NewServer(httpadapter.ServerConfig{
 		Addr: testServerAddr,
 		Auth: &httpadapter.AuthConfig{JWTSecret: testJWTSecret},
 	}, handler, nil, nil).Handler)
+}
+
+type autoReservePublisher struct {
+	app.NoopEventPublisher
+	carts *app.CartService
+}
+
+func (p *autoReservePublisher) PublishReserveItems(ctx context.Context, event app.ReserveItems, _ string) error {
+	if err := p.carts.HandleItemsReserved(ctx, app.ItemsReserved{
+		UserID:    event.UserID,
+		ProductID: event.ProductID,
+		Quantity:  event.Quantity,
+	}); err != nil {
+		return fmt.Errorf("handle test reservation: %w", err)
+	}
+	return nil
 }
 
 func TestHealth(t *testing.T) {
@@ -204,7 +223,7 @@ func TestCheckout_createsOrder(t *testing.T) {
 		OrderID    string `json:"order_id"`
 	}
 	require.NoError(t, json.NewDecoder(checkoutResp.Body).Decode(&order))
-	assert.Equal(t, string(domain.OrderStatusPending), order.Status)
+	assert.Equal(t, string(domain.OrderStatusReserved), order.Status)
 	assert.Equal(t, int64(100), order.TotalPrice)
 	assert.NotEmpty(t, order.OrderID)
 
@@ -266,6 +285,8 @@ func TestCancelOrder_confirmedForbidden(t *testing.T) {
 
 	cart, err := domain.NewCart(userID, *item)
 	require.NoError(t, err)
+	cart.EnsurePendingOrderID()
+	require.NoError(t, cart.MarkItemReserved(item.ProductID()))
 	require.NoError(t, cartRepo.Save(t.Context(), cart))
 
 	order, err := orderService.Checkout(t.Context(), userID, "Moscow", cart.UpdatedAt())
@@ -284,7 +305,7 @@ func TestCancelOrder_confirmedForbidden(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, orderRepo.Save(t.Context(), confirmed))
 
-	handler := httpadapter.NewHandler(app.NewCartService(cartRepo), orderService, nil)
+	handler := httpadapter.NewHandler(app.NewCartService(cartRepo), orderService, nil, nil)
 	testServer := httptest.NewServer(httpadapter.NewServer(httpadapter.ServerConfig{Addr: testServerAddr, Auth: &httpadapter.AuthConfig{JWTSecret: testJWTSecret}}, handler, nil, nil).Handler)
 	t.Cleanup(testServer.Close)
 
@@ -490,7 +511,7 @@ func TestRemoveCartItem_success(t *testing.T) {
 type failingReadinessChecker struct{}
 
 func (failingReadinessChecker) Check(context.Context) (bool, map[string]string) {
-	return false, map[string]string{"postgres": "connection refused"}
+	return false, map[string]string{testCheckPostgres: "connection refused"}
 }
 
 func TestReady_notReady(t *testing.T) {
@@ -500,7 +521,7 @@ func TestReady_notReady(t *testing.T) {
 	orderRepo := ordermemory.NewOrderRepository()
 	cartService := app.NewCartService(cartRepo)
 	orderService := app.NewOrderService(cartRepo, orderRepo, app.NewNoopEventPublisher(), app.NewNoopOrderMetrics())
-	handler := httpadapter.NewHandler(cartService, orderService, failingReadinessChecker{})
+	handler := httpadapter.NewHandler(cartService, orderService, failingReadinessChecker{}, nil)
 
 	server := httptest.NewServer(httpadapter.NewServer(httpadapter.ServerConfig{Addr: testServerAddr, Auth: &httpadapter.AuthConfig{JWTSecret: testJWTSecret}}, handler, nil, nil).Handler)
 	t.Cleanup(server.Close)
@@ -595,7 +616,7 @@ func TestGetCart_internalError(t *testing.T) {
 		app.NewNoopEventPublisher(),
 		app.NewNoopOrderMetrics(),
 	)
-	handler := httpadapter.NewHandler(errorCartService{}, orderService, nil)
+	handler := httpadapter.NewHandler(errorCartService{}, orderService, nil, nil)
 	server := httptest.NewServer(httpadapter.NewServer(httpadapter.ServerConfig{Addr: testServerAddr, Auth: &httpadapter.AuthConfig{JWTSecret: testJWTSecret}}, handler, nil, nil).Handler)
 	t.Cleanup(server.Close)
 

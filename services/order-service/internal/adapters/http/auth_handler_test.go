@@ -34,7 +34,7 @@ func newAuthTestServer(t *testing.T, repo app.UserRepository) *httptest.Server {
 	t.Helper()
 
 	authService := app.NewAuthService(repo, testJWTSecret, time.Hour)
-	handler := httpadapter.NewHandler(nil, nil, nil)
+	handler := httpadapter.NewHandler(nil, nil, nil, nil)
 
 	return httptest.NewServer(httpadapter.NewServer(httpadapter.ServerConfig{
 		Addr: testServerAddr,

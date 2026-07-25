@@ -1,0 +1,117 @@
+definitions:
+  http.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  http.orderItemResponse:
+    properties:
+      product_id:
+        type: string
+      quantity:
+        type: integer
+      total_price:
+        type: integer
+      unit_price:
+        type: integer
+    type: object
+  http.orderResponse:
+    properties:
+      created_at:
+        type: string
+      delivery_address:
+        type: string
+      items:
+        items:
+          $ref: '#/definitions/http.orderItemResponse'
+        type: array
+      order_id:
+        type: string
+      status:
+        type: string
+      total_price:
+        type: integer
+      updated_at:
+        type: string
+      user_id:
+        type: string
+    type: object
+  http.ordersListResponse:
+    properties:
+      orders:
+        items:
+          $ref: '#/definitions/http.orderResponse'
+        type: array
+    type: object
+info:
+  contact: {}
+  description: REST API for cart, checkout, and order management.
+  title: Order Service API
+  version: "1.0"
+paths:
+  /orders:
+    get:
+      parameters:
+      - description: Page size
+        in: query
+        name: limit
+        type: integer
+      - description: Page offset
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/http.ordersListResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: List user orders
+      tags:
+      - orders
+  /orders/{id}/pay:
+    post:
+      parameters:
+      - description: Order ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/http.orderResponse'
+        "402":
+          description: Payment Required
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Pay for a reserved order
+      tags:
+      - orders
+securityDefinitions:
+  BearerAuth:
+    description: Type "Bearer" followed by a space and JWT token.
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

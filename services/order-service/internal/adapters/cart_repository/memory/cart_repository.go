@@ -46,7 +46,7 @@ func (r *CartRepository) Save(_ context.Context, cart *domain.Cart) error {
 }
 
 func cloneCart(cart *domain.Cart) (*domain.Cart, error) {
-	cloned, err := domain.ReconstituteCart(cart.UserID(), cart.UpdatedAt(), cart.Items()...)
+	cloned, err := domain.ReconstituteCart(cart.UserID(), cart.PendingOrderID(), cart.UpdatedAt(), cart.Items()...)
 	if err != nil {
 		return nil, fmt.Errorf("reconstitute cart: %w", err)
 	}

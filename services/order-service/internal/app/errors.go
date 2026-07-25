@@ -8,4 +8,6 @@ var (
 	ErrInvalidUserID           = errors.New("invalid user id")
 	ErrInvalidProductID        = errors.New("invalid product id")
 	ErrInvalidOrderID          = errors.New("invalid order id")
+	ErrOrderNotPayable         = errors.New("order is not payable")
+	ErrPaymentFailed           = errors.New("payment failed")
 )
