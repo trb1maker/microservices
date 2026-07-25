@@ -58,7 +58,7 @@
 
 **Контекст:** Несколько микросервисов используют одинаковую инфраструктуру (slog, health probes).  
 **Решение:** Вынести технический код в отдельный Go-модуль [`pkg/`](../pkg/) (`logging`, `health`, позже — OTel/Prometheus helpers).  
-**Связь с сервисами:** модуль `github.com/trb1maker/microservices/pkg`; в `go.mod` каждого сервиса — `require` + `replace => ../../pkg` (подмодуль не публикуется в proxy). В [`go.work`](../go.work) — `use` для `pkg` и всех сервисов; Docker копирует `go.work` при сборке.
+**Связь с сервисами:** модуль `github.com/trb1maker/microservices/pkg`; в `go.mod` каждого сервиса — `require github.com/trb1maker/microservices/pkg v0.0.0`. Локальное разрешение путей — в [`go.work`](../go.work): `use` для сервисов и `tests/e2e`, versioned `replace` для локальных модулей `v0.0.0` (без дублирования в `go.mod` сервисов). Для редактирования `pkg/` — отдельный [`pkg/go.work`](../pkg/go.work) (`use .`), чтобы `gopls` видел зависимости модуля; Docker копирует корневой `go.work` при сборке.
 **Обоснование:** Единообразие логов и проб без дублирования; домен и конфигурация остаются в `services/<name>/internal/`.  
 **Не входит в pkg:** бизнес-сущности, use cases, миграции БД, env-структуры сервисов.
 
