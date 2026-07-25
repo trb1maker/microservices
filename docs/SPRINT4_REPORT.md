@@ -88,7 +88,7 @@ deploy/certs/
   payment-service/client.crt + client.key   # заготовка для спринта 5
 ```
 
-Генерация: `scripts/certs/generate.sh` → `task certs:generate`.  
+Генерация: `scripts/generate-certs.sh` → `task generate:certs`.  
 Артефакты в `.gitignore`; CI генерирует на лету.
 
 ### NATS mTLS
@@ -123,7 +123,7 @@ curl -k https://localhost:8080/orders/<id> \
 
 В `.github/workflows/ci.yml` перед Docker build:
 
-1. `bash scripts/certs/generate.sh`
+1. `bash scripts/generate-certs.sh`
 2. COPY certs в образ
 3. Smoke: `curl -kfsS https://localhost:8080/health` с env `JWT_SECRET`, `TLS_*`
 
@@ -136,8 +136,8 @@ curl -k https://localhost:8080/orders/<id> \
 | `pkg/auth/`                 | JWT issue/validate, bcrypt |
 | `pkg/middleware/auth.go`    | JWT + mTLS middleware      |
 | `pkg/tlsutil/`              | TLS config helpers         |
-| `scripts/certs/generate.sh` | OpenSSL CA + certs         |
-| `scripts/jwt/mint.go`       | CLI для mint JWT           |
+| `scripts/generate-certs.sh` | OpenSSL CA + certs         |
+| `scripts/mint-jwt.go`       | CLI для mint JWT           |
 
 ---
 

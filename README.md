@@ -4,31 +4,53 @@
 
 ## Архитектура
 
-Монорепозиторий: общая документация и инфраструктура в корне, общие пакеты в `pkg/`, каждый микросервис — отдельный Go-модуль в `services/<name>/`.
+Монорепозиторий на **одном Go-модуле** `github.com/trb1maker/microservices`:
 
 ```
 microservices/
-  pkg/              — общая инфраструктура, сгенерированные proto-контракты (logging, health, proto/…)
-  api/              — исходные proto-схемы (генерация: task proto:gen → pkg/proto/)
-  docs/             — DESIGN, PLAN, ADR, отчёты
-  services/
-    order-service/  — корзина, заказы, Saga
-    ...             — остальные сервисы (по мере реализации)
-  go.work           — workspace для локальной разработки
-  Taskfile.yml      — общие задачи (lint, test, build)
+  go.mod / go.sum
+  api/                    — исходные proto-схемы (генерация: task gen:proto)
+  cmd/<service>/          — точки входа (main.go)
+  internal/
+    platform/             — общая инфраструктура (logging, health, proto, OTel, …)
+    <service>/            — код сервиса (app, adapters, config, domain, migrations)
+  tests/
+    integration/<service>/  — один сервис + Testcontainers
+    e2e/                  — saga всех сервисов (testwire)
+    ui/                   — demo UI gateway (HTMX)
+  deploy/docker/<service>     — Dockerfile для сборки образов
+  Taskfile.yml            — lint, test, build, demo
+  golangci-lint.mod       — pinned golangci-lint (go tool -modfile)
 ```
 
 Пять сервисов платформы:
 
 | Сервис                                                         | Назначение                             | Статус     |
 | -------------------------------------------------------------- | -------------------------------------- | ---------- |
-| [order-service](services/order-service/)                       | Корзина, заказы, BFF (REST/gRPC), Saga | Реализован |
+| [order-service](docs/ORDER-SERVICE.md)                         | Корзина, заказы, BFF (REST/gRPC), Saga | Реализован |
 | [store-service](docs/STORE-SERVICE.md)                         | Каталог, остатки, резервирование       | Реализован |
 | [payment-service](docs/PAYMENT-SERVICE.md)                     | Платежи (gRPC Charge/Refund)           | Реализован |
 | [notification-service](docs/NOTIFICATION-SERVICE.md)           | Уведомления пользователю               | Реализован |
 | [analytics-service](docs/ANALYTICS-SERVICE.md)                 | Чеки, витрины, MinIO                   | Реализован |
 
 Подробнее: [docs/DESIGN.md](docs/DESIGN.md)
+
+## Реструктуризация репозитория
+
+Репозиторий переведён на **один Go-модуль** в корне (`go.mod`), без `go.work`, каталогов `services/` и `pkg/`.
+
+| Было | Стало |
+| ---- | ----- |
+| `services/<name>/` + отдельные `go.mod` | `cmd/<name>/` + `internal/<name>/` |
+| `pkg/` | `internal/platform/` |
+| integration-тесты внутри сервисов | `tests/integration/<service>/` |
+| E2E saga в сервисах | `tests/e2e/` |
+| UI в compose | UI локально: `task demo:ui` |
+| копия `.env` | [`.env.example`](.env.example) напрямую (Task `dotenv`, compose) |
+
+**Документация** — только в корне и `docs/`; в `internal/<service>/` остаётся код (миграции, шаблоны, сгенерированный Swagger).
+
+**CI локально:** `task ci` = lint + unit/integration/e2e + docker smoke.
 
 ## Документация
 
@@ -49,9 +71,9 @@ microservices/
 
 ## Микросервисы
 
-Доменные описания — в `docs/*-SERVICE.md`; подробный API и запуск order-service — в его README.
+Доменные описания — в `docs/*-SERVICE.md`.
 
-- **[order-service](services/order-service/README.md)** — REST/gRPC API, Saga, Swagger, health dashboard
+- **[order-service](docs/ORDER-SERVICE.md)** — REST/gRPC API, Saga, Swagger, health dashboard
 - **[payment-service](docs/PAYMENT-SERVICE.md)** — gRPC Charge/Refund, PostgreSQL, NATS
 - **[store-service](docs/STORE-SERVICE.md)** — MongoDB, NATS worker резервирования
 - **[notification-service](docs/NOTIFICATION-SERVICE.md)** — NATS consumer, slog-уведомления
@@ -63,56 +85,57 @@ microservices/
 
 | Команда                          | Описание                                  |
 | -------------------------------- | ----------------------------------------- |
-| `task lint`                      | golangci-lint (все сервисы + UI)          |
-| `task test`                      | unit + integration + E2E                  |
-| `task test:unit`                 | юнит-тесты                                |
-| `task test:integration`          | интеграционные тесты (Docker)             |
-| `task test:e2e`                  | сквозные E2E-тесты saga (Testcontainers)   |
-| `task certs:generate`            | TLS/mTLS сертификаты (первый запуск)      |
+| `task lint`                      | golangci-lint (check-only)                |
+| `task lint:fix`                  | golangci-lint с автоисправлением          |
+| `task ci`                        | полный CI pipeline (lint + test + docker) |
+| `task test:unit`                 | юнит-тесты (`cmd/`, `internal/`, `tests/ui/`) |
+| `task test:integration`          | один сервис + Testcontainers              |
+| `task test:e2e`                  | saga всех сервисов (testwire)             |
+| `task generate:certs`            | TLS/mTLS сертификаты (первый запуск)      |
 | `task jwt:mint USER_ID=<uuid>`   | Mint JWT без login (load test / CI)       |
-| `task demo:up`                   | полный dev-стек (сервисы + UI + observability) |
+| `task build:apps`                | сборка бинарников сервисов в `bin/`       |
+| `task build:images`              | dev-образы сервисов `<service>:dev`       |
+| `task gen:proto`                 | генерация Go из `api/**/*.proto` → `internal/platform/proto/` |
+| `task gen:swagger`               | Swagger для order-service                 |
+| `task demo:up`                   | поднять сервисы + observability (без UI)  |
 | `task demo:traffic`              | демо-трафик для метрик и алертов          |
-| `task demo:down`                 | остановить compose (volumes сохраняются)  |
-| `task demo:reset`                | `docker compose down -v` (destructive)    |
-| `task ui:run`                    | локальный UI gateway (нужен order-service) |
-| `task proto:gen`                 | генерация Go из `api/**/*.proto` → `pkg/proto/` |
-| `task build`                     | сборка бинарников в `bin/` (включая UI)   |
-| `task docker:build`              | dev-образы `<service>:dev` + UI           |
+| `task demo:ui`                   | demo UI локально (после `task demo:up`)   |
+| `task demo:down`                 | остановить compose и удалить volumes      |
 
-Список сервисов для циклических задач задаётся в [`Taskfile.yml`](Taskfile.yml) (`vars.SERVICES`). При добавлении нового микросервиса достаточно дописать имя в этот список.
+Список сервисов для циклических задач задаётся в [`Taskfile.yml`](Taskfile.yml) (`vars.SERVICES`).
 
-## Go-модули и workspace
+## Go-модуль
 
-| Модуль       | Путь в `go.mod`                                      |
-| ------------ | ---------------------------------------------------- |
-| shared `pkg` | `github.com/trb1maker/microservices/pkg`             |
-| сервис       | `github.com/trb1maker/microservices/services/<name>` |
+Единый модуль `github.com/trb1maker/microservices` в корне. Импорты:
 
-[`go.work`](go.work) подключает сервисы, `scripts/ui` и `tests/e2e` через `use`; локальные пути для зависимостей `v0.0.0` задаются versioned `replace` в том же файле. Модуль [`pkg/`](pkg/) не входит в корневой `use` (чтобы IDE и `gopls` не ломали его зависимости); для работы в `pkg/` используется отдельный [`pkg/go.work`](pkg/go.work). Proto-схемы лежат в `api/`, сгенерированный Go — в `pkg/proto/` (`task proto:gen`).
+| Код | Import path |
+| --- | ----------- |
+| platform | `github.com/trb1maker/microservices/internal/platform/...` |
+| сервис | `github.com/trb1maker/microservices/internal/<service>/...` |
+| main | `./cmd/<service>` |
 
 **Новый сервис:**
 
-1. `go mod init github.com/trb1maker/microservices/services/<name>`
-2. `go work use ./services/<name>` (из корня)
-3. `require github.com/trb1maker/microservices/pkg v0.0.0` в `go.mod` сервиса (без `replace`; локальные пути — в [`go.work`](go.work) через `use` и versioned `replace`)
+1. `cmd/<name>/main.go` — composition root
+2. `internal/<name>/` — app, adapters, config, domain
+3. `deploy/docker/<name>`
 4. Имя в `Taskfile.yml` → `vars.SERVICES`
 
-Команды (`lint`, `test`, `go mod tidy`, `task test:e2e`) — из **корня репозитория** (активен [`go.work`](go.work)).
+**Lint:** версия golangci-lint зафиксирована в [`golangci-lint.mod`](golangci-lint.mod); запуск: `go tool -modfile=golangci-lint.mod golangci-lint run ...`.
 
 ## CI/CD
 
 GitHub Actions: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 
-| Событие         | Какие сервисы проверяются                                                 |
-| --------------- | ------------------------------------------------------------------------- |
-| `pull_request`  | Только изменённые (`services/<name>/**`); при правке общих конфигов — все |
-| `push` в `main` | Все сервисы с `services/*/go.mod`                                         |
+На каждый `push` / `pull_request` в `main` — один job: `task ci` (lint + test + docker smoke).
 
-Общие конфиги (триггер «все сервисы» на PR): `.golangci.yaml`, `go.work`, `go.work.sum`, `Taskfile.yml`, `docker-compose.yml`, `api/**`, `pkg/**`, `scripts/ui/**`, `.github/workflows/*`.
+Локально тот же pipeline:
 
-На каждый сервис в matrix: lint, test, build, docker (если есть `deploy/Dockerfile`), smoke `/health`. Push образа в GHCR — только на `main`: `ghcr.io/<owner>/<repo>/<service>:<sha>`.
+```bash
+task ci
+```
 
-Локальная автоматизация — [`Taskfile.yml`](Taskfile.yml); CI использует явные команды в workflow.
+Push образов в GHCR — только на `main`: `ghcr.io/<owner>/<repo>/<service>:<sha>` и `:latest`.
 
 ## Наблюдаемость
 
@@ -121,14 +144,15 @@ GitHub Actions: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 Перед первым запуском:
 
 ```bash
-task certs:generate
-cp .env.example .env
+task generate:certs
 ```
+
+Конфигурация — [`.env.example`](.env.example) (используется напрямую для compose, UI и тестов через Task).
 
 | Сервис            | URL                                 |
 | ----------------- | ----------------------------------- |
 | order-service API | https://localhost:8080 (`curl -k`)  |
-| **order UI**      | http://localhost:8081               |
+| **order UI**      | http://localhost:8081 (`task demo:ui` после `task demo:up`) |
 | Prometheus        | http://localhost:9090               |
 | Grafana           | http://localhost:3000 (admin/admin) |
 | Jaeger UI         | http://localhost:16686              |
@@ -148,22 +172,23 @@ curl -k https://localhost:8080/cart -H "Authorization: Bearer <access_token>"
 ```
 
 ```bash
-task demo:up       # поднять всё (генерирует certs автоматически)
+task demo:up       # поднять сервисы и observability
+task demo:ui       # в отдельном терминале — локальный UI
+open http://localhost:8081
 task demo:traffic  # сгенерировать трафик
-task demo:down     # остановить (volumes сохраняются)
-# task demo:reset  # down -v — удаляет данные БД
+task demo:down     # остановить и удалить volumes
 ```
 
 Конфиги: [`deploy/observability/`](deploy/observability/). Подробности — [SPRINT3_REPORT.md](docs/SPRINT3_REPORT.md).
 
 ## Demo UI (HTMX)
 
-Go UI gateway в [`scripts/ui/`](scripts/ui/) — браузерный интерфейс для корзины, checkout, оплаты и отмены заказа. Статусы заказа приходят через **SSE**; gateway транслирует внутренний gRPC `WatchOrderStatus` в браузер (JWT хранится только в HttpOnly session-cookie на сервере).
+Go UI gateway в [`tests/ui/`](tests/ui/) — локальный тестовый интерфейс (не входит в docker-compose). Запускается после поднятия сервисов через `task demo:ui`.
 
 ```bash
-task certs:generate
-cp .env.example .env   # при необходимости
+task generate:certs
 task demo:up
+task demo:ui           # отдельный терминал
 open http://localhost:8081
 ```
 
@@ -176,4 +201,4 @@ open http://localhost:8081
 
 **Каталог UI** использует фиксированные UUID-товары из Store seed (`22222222-…`, `33333333-…`, `44444444-…`); legacy `prod-*` не проходят UUID-валидацию Cart API. Счета demo-пользователей создаёт миграция Payment Service.
 
-Локально без compose: поднимите order-service (с gRPC, не `USE_MEMORY=true`) и выполните `task ui:run`.
+Локально без compose: поднимите order-service (с gRPC, не `USE_MEMORY=true`) и выполните `task demo:ui`.

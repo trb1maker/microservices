@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS daily_summary (
 
 ## MinIO инициализация
 
-Бакет `receipts` создаётся автоматически через init-контейнер в docker-compose (см. `scripts/init-minio.sh`).
+Бакет `receipts` создаётся автоматически через init-контейнер в docker-compose (см. `deploy/minio/init-bucket.sh`).
 
 ---
 

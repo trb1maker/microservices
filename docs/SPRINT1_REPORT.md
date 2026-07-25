@@ -79,14 +79,13 @@ curl -X POST localhost:8080/orders \
 
 Workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 
-| Job       | Описание                                                                   |
-| --------- | -------------------------------------------------------------------------- |
-| `changes` | Определяет затронутые сервисы (гибрид: PR — diff, `main` — все)            |
-| `ci`      | Matrix по сервисам: lint, test, build, docker + smoke, push GHCR на `main` |
+| Job  | Описание                                      |
+| ---- | --------------------------------------------- |
+| `ci` | `task ci` (lint + test + docker); push GHCR на `main` |
 
 Образы в GHCR: `ghcr.io/<owner>/<repo>/<service>:<sha>` и `:latest` (по одному на сервис).
 
-Локально — `task`; в CI — явные `go` / `golangci-lint` / `docker` команды (без Taskfile).
+Локально и в CI — `task ci`.
 
 ---
 

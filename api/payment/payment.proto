@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package payment;
 
-option go_package = "github.com/trb1maker/microservices/pkg/proto/payment;payment";
+option go_package = "github.com/trb1maker/microservices/internal/platform/proto/payment;payment";
 
 // PaymentService handles payment operations.
 service PaymentService {

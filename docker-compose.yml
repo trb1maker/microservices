@@ -59,7 +59,7 @@ services:
   order-service:
     build:
       context: .
-      dockerfile: services/order-service/deploy/Dockerfile
+      dockerfile: deploy/docker/order-service
     ports:
       - "8080:8080"
       - "50052:50052"
@@ -112,32 +112,10 @@ services:
       logging: promtail
       service: order-service
 
-  ui:
-    build:
-      context: .
-      dockerfile: scripts/ui/deploy/Dockerfile
-    ports:
-      - "8081:8081"
-    environment:
-      UI_HTTP_ADDR: :8081
-      ORDER_HTTP_URL: https://order-service:8080
-      ORDER_GRPC_ADDR: order-service:50052
-      TLS_CA_FILE: /certs/ca/ca.crt
-      TLS_SKIP_VERIFY: "false"
-      UI_SESSION_SECRET: ${UI_SESSION_SECRET:-dev-ui-session-secret-minimum-32-chars}
-    volumes:
-      - ./deploy/certs:/certs:ro
-    depends_on:
-      order-service:
-        condition: service_started
-    labels:
-      logging: promtail
-      service: ui
-
   payment-service:
     build:
       context: .
-      dockerfile: services/payment-service/deploy/Dockerfile
+      dockerfile: deploy/docker/payment-service
     ports:
       - "50051:50051"
       - "9091:9091"
@@ -177,7 +155,7 @@ services:
   store-service:
     build:
       context: .
-      dockerfile: services/store-service/deploy/Dockerfile
+      dockerfile: deploy/docker/store-service
     ports:
       - "9092:9092"
     environment:
@@ -239,13 +217,13 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       MINIO_BUCKET: ${MINIO_BUCKET:-receipts}
     volumes:
-      - ./scripts/init-minio.sh:/init-minio.sh:ro
-    entrypoint: ["/bin/sh", "/init-minio.sh"]
+      - ./deploy/minio/init-bucket.sh:/init-bucket.sh:ro
+    entrypoint: ["/bin/sh", "/init-bucket.sh"]
 
   notification-service:
     build:
       context: .
-      dockerfile: services/notification-service/deploy/Dockerfile
+      dockerfile: deploy/docker/notification-service
     ports:
       - "9095:9093"
     environment:
@@ -276,7 +254,7 @@ services:
   analytics-service:
     build:
       context: .
-      dockerfile: services/analytics-service/deploy/Dockerfile
+      dockerfile: deploy/docker/analytics-service
     ports:
       - "9094:9094"
     environment:

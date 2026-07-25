@@ -1,0 +1,23 @@
+FROM golang:1.26.4-alpine AS builder
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o payment-service ./cmd/payment-service
+
+FROM scratch
+
+EXPOSE 50051
+
+COPY --from=builder /src/payment-service /payment-service
+COPY deploy/certs/payment-service/server.crt /certs/server.crt
+COPY deploy/certs/payment-service/server.key /certs/server.key
+COPY deploy/certs/ca/ca.crt /certs/ca.crt
+COPY deploy/certs/payment-service/client.crt /certs/client.crt
+COPY deploy/certs/payment-service/client.key /certs/client.key
+
+ENTRYPOINT ["/payment-service"]
