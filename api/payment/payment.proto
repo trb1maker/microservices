@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package payment;
+
+option go_package = "github.com/trb1maker/microservices/pkg/proto/payment;payment";
+
+// PaymentService handles payment operations.
+service PaymentService {
+  // Charge processes a payment for an order.
+  rpc Charge(ChargeRequest) returns (ChargeResponse);
+  // Refund processes a refund for a previously charged order.
+  rpc Refund(RefundRequest) returns (RefundResponse);
+}
+
+message ChargeRequest {
+  string order_id = 1;
+  string user_id = 2;
+  int64 amount = 3; // amount in minor units (e.g., cents)
+}
+
+message ChargeResponse {
+  string transaction_id = 1;
+  PaymentStatus status = 2;
+  string message = 3;
+}
+
+message RefundRequest {
+  string order_id = 1;
+  string user_id = 2;
+  int64 amount = 3;
+  string original_transaction_id = 4;
+}
+
+message RefundResponse {
+  string transaction_id = 1;
+  PaymentStatus status = 2;
+  string message = 3;
+}
+
+enum PaymentStatus {
+  PAYMENT_STATUS_UNSPECIFIED = 0;
+  SUCCEEDED = 1;
+  FAILED = 2;
+}

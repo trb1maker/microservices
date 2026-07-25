@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package order;
+
+option go_package = "github.com/trb1maker/microservices/pkg/proto/order;order";
+
+service OrderService {
+  rpc WatchOrderStatus(WatchOrderStatusRequest) returns (stream StatusUpdate);
+}
+
+message WatchOrderStatusRequest {
+  string order_id = 1;
+}
+
+message StatusUpdate {
+  string order_id = 1;
+  string status = 2;
+  string reason = 3;
+  string timestamp = 4;
+}
