@@ -6,7 +6,8 @@ CERTS_DIR="${ROOT_DIR}/deploy/certs"
 DAYS=825
 CA_SUBJ="/CN=Microservices Dev CA/O=Microservices/C=RU"
 
-mkdir -p "${CERTS_DIR}/ca" "${CERTS_DIR}/nats" "${CERTS_DIR}/order-service" "${CERTS_DIR}/payment-service"
+mkdir -p "${CERTS_DIR}/ca" "${CERTS_DIR}/nats" "${CERTS_DIR}/order-service" "${CERTS_DIR}/payment-service" \
+  "${CERTS_DIR}/notification-service" "${CERTS_DIR}/analytics-service" "${CERTS_DIR}/store-service"
 
 if [[ ! -f "${CERTS_DIR}/ca/ca.key" ]]; then
   openssl genrsa -out "${CERTS_DIR}/ca/ca.key" 4096
@@ -63,7 +64,11 @@ EOF
 
 generate_cert "nats" "nats" "${CERTS_DIR}/nats" "DNS:nats,DNS:localhost,IP:127.0.0.1"
 generate_cert "order-service" "order-service" "${CERTS_DIR}/order-service" "DNS:order-service,DNS:localhost,IP:127.0.0.1"
+generate_cert "payment-service" "payment-service" "${CERTS_DIR}/payment-service" "DNS:payment-service,DNS:localhost,IP:127.0.0.1"
 generate_client_cert "order-service" "${CERTS_DIR}/order-service"
 generate_client_cert "payment-service" "${CERTS_DIR}/payment-service"
+generate_client_cert "notification-service" "${CERTS_DIR}/notification-service"
+generate_client_cert "analytics-service" "${CERTS_DIR}/analytics-service"
+generate_client_cert "store-service" "${CERTS_DIR}/store-service"
 
 echo "Certificates generated in ${CERTS_DIR}"

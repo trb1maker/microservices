@@ -1,0 +1,125 @@
+{{define "home.html"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Order Demo UI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/htmx-ext-sse@2.2.4/sse.js" crossorigin="anonymous"></script>
+</head>
+<body class="bg-slate-100 text-slate-900" hx-ext="sse">
+  <main class="mx-auto max-w-5xl p-6 space-y-6">
+    <header class="rounded bg-white p-4 shadow">
+      <h1 class="text-2xl font-semibold">Order Demo UI</h1>
+      <p class="text-sm text-slate-600">Go + HTMX + SSE gateway over order-service</p>
+      {{if .Session.UserEmail}}
+        <p class="mt-2 text-sm">Signed in as <strong>{{.Session.UserEmail}}</strong></p>
+      {{else}}
+        <p class="mt-2 text-sm text-amber-700">Select a demo user to start.</p>
+      {{end}}
+    </header>
+
+    <section class="rounded bg-white p-4 shadow">
+      <h2 class="mb-3 text-lg font-medium">Demo users</h2>
+      <form method="post" action="/session/user" class="flex flex-wrap gap-2">
+        {{range .Users}}
+          <button type="submit" name="email" value="{{.Email}}" class="rounded border px-3 py-2 hover:bg-slate-50">
+            {{.Label}} ({{.Email}})
+          </button>
+        {{end}}
+      </form>
+    </section>
+
+    <section class="rounded bg-white p-4 shadow">
+      <h2 class="mb-3 text-lg font-medium">Products</h2>
+      <div class="grid gap-3 md:grid-cols-3">
+        {{range .Products}}
+          <form hx-post="/cart/items" hx-target="#cart" hx-swap="innerHTML" class="rounded border p-3">
+            <p class="font-medium">{{.Name}}</p>
+            <p class="text-sm text-slate-600">{{.SKU}} · {{.Price}} kopecks</p>
+            <input type="hidden" name="product_id" value="{{.ID}}">
+            <label class="mt-2 block text-sm">Qty
+              <input type="number" name="quantity" value="1" min="1" class="mt-1 w-full rounded border px-2 py-1">
+            </label>
+            <button type="submit" class="mt-3 w-full rounded bg-slate-900 px-3 py-2 text-white">Add to cart</button>
+          </form>
+        {{end}}
+      </div>
+    </section>
+
+    <section class="rounded bg-white p-4 shadow">
+      <h2 class="mb-3 text-lg font-medium">Cart</h2>
+      <div id="cart">
+        {{template "cart.html" .}}
+      </div>
+    </section>
+
+    <section class="rounded bg-white p-4 shadow">
+      <h2 class="mb-3 text-lg font-medium">Checkout</h2>
+      <form hx-post="/orders" hx-target="#order-panel" hx-swap="innerHTML" class="space-y-3">
+        <label class="block text-sm">Delivery address
+          <input type="text" name="delivery_address" value="Demo Street 1" class="mt-1 w-full rounded border px-3 py-2">
+        </label>
+        <button type="submit" class="rounded bg-emerald-700 px-4 py-2 text-white">Create order</button>
+      </form>
+    </section>
+
+    <section id="order-panel" class="rounded bg-white p-4 shadow">
+      {{if .ActiveOrderID}}
+        {{/* order panel filled after checkout */}}
+      {{else}}
+        <p class="text-sm text-slate-600">Order status will appear here after checkout.</p>
+      {{end}}
+    </section>
+  </main>
+</body>
+</html>
+{{end}}
+
+{{define "cart.html"}}
+  {{if not .Cart.Items}}
+    <p class="text-sm text-slate-600">Cart is empty.</p>
+  {{else}}
+    <ul class="space-y-2">
+      {{range .Cart.Items}}
+        <li class="flex items-center justify-between rounded border px-3 py-2">
+          <span>{{.ProductID}} × {{.Quantity}} = {{.TotalPrice}}</span>
+          <button hx-delete="/cart/items/{{.ProductID}}" hx-target="#cart" hx-swap="innerHTML" class="text-sm text-red-700">Remove</button>
+        </li>
+      {{end}}
+    </ul>
+    <p class="mt-3 font-medium">Total: {{.Cart.TotalPrice}}</p>
+  {{end}}
+{{end}}
+
+{{define "order_panel.html"}}
+  <div class="space-y-3">
+    <h2 class="text-lg font-medium">Order {{.Order.OrderID}}</h2>
+    <p>Status: <strong id="order-status">{{.Order.Status}}</strong></p>
+    <p>Total: {{.Order.TotalPrice}}</p>
+    <div class="flex gap-2">
+      <button hx-post="/orders/{{.Order.OrderID}}/pay" hx-target="#order-panel" hx-swap="innerHTML" class="rounded bg-blue-700 px-3 py-2 text-white">Pay</button>
+      <button hx-delete="/orders/{{.Order.OrderID}}" hx-target="#order-panel" hx-swap="innerHTML" class="rounded bg-red-700 px-3 py-2 text-white">Cancel</button>
+    </div>
+    <div id="status-stream"
+         sse-connect="/orders/{{.Order.OrderID}}/events"
+         sse-swap="order_status"
+         hx-ext="sse"
+         class="mt-4 space-y-2 rounded border bg-slate-50 p-3">
+      <p class="text-sm text-slate-600">Live status updates:</p>
+    </div>
+  </div>
+{{end}}
+
+{{define "status.html"}}
+  <div class="rounded border bg-white px-3 py-2 text-sm">
+    <p><strong>{{.Status}}</strong>{{if .Reason}} · {{.Reason}}{{end}}</p>
+    <p class="text-slate-500">{{.Timestamp}}</p>
+  </div>
+{{end}}
+
+{{define "error.html"}}
+  <div class="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">{{.Message}}</div>
+{{end}}

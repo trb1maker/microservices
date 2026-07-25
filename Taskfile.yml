@@ -4,7 +4,11 @@ version: "3"
 
 vars:
   SERVICES:
+    - analytics-service
+    - notification-service
     - order-service
+    - payment-service
+    - store-service
   DOCKER_TAG: dev
   COMPOSE_ENV_FILE: .env
 
@@ -14,77 +18,47 @@ tasks:
     cmds:
       - test -f {{.COMPOSE_ENV_FILE}} || cp .env.example {{.COMPOSE_ENV_FILE}}
     silent: true
+
   fmt:
     desc: Форматирование кода
     cmds:
-      - golangci-lint fmt ./pkg/...
+      - cmd: cd pkg && GOWORK=off golangci-lint fmt ./...
       - for: { var: SERVICES }
         cmd: golangci-lint fmt ./services/{{.ITEM}}/...
+      - golangci-lint fmt ./scripts/ui/...
     silent: true
 
-  lint:
-    desc: Линтинг кода
+  gen:proto:
+    desc: Генерация Go-кода из proto-схем (api/ → pkg/proto/)
     cmds:
-      - for: { var: SERVICES }
-        cmd: golangci-lint run ./pkg/... ./services/{{.ITEM}}/... --fix --max-same-issues=0
+      - |
+        set -e
+        for f in $(find api -name '*.proto' | sort); do
+          relpath="${f#api/}"
+          protoc --proto_path=api \
+            --go_out=pkg --go_opt=module=github.com/trb1maker/microservices/pkg \
+            --go-grpc_out=pkg --go-grpc_opt=module=github.com/trb1maker/microservices/pkg \
+            "$relpath"
+        done
     silent: true
 
-  test:unit:
-    desc: Юнит-тестирование
+  gen:swagger:
+    desc: Генерация Swagger для order-service
     cmds:
-      - go test -v -race ./pkg/...
-      - for: { var: SERVICES }
-        cmd: go test -v -race ./services/{{.ITEM}}/...
+      - swag init -g cmd/main.go -o docs/swagger --parseDependency --parseInternal
+    dir: services/order-service
     silent: true
 
-  test:integration:
-    desc: Интеграционное тестирование
-    cmds:
-      - for: { var: SERVICES }
-        cmd: go test -tags=integration -timeout 10m ./services/{{.ITEM}}/...
-    silent: true
-
-  build:
-    desc: Сборка бинарников
-    cmds:
-      - for: { var: SERVICES }
-        cmd: go build -o bin/{{.ITEM}} ./services/{{.ITEM}}/cmd/main.go
-    silent: true
-
-  run:
-    desc: Запуск сервиса локально (task run SERVICE=order-service)
-    requires:
-      vars: [SERVICE]
-    cmds:
-      - go run ./services/{{.SERVICE}}/cmd/main.go
-    silent: true
-
-  docker:build:
-    desc: Сборка dev-образов
-    deps: [certs:generate]
-    cmds:
-      - for: { var: SERVICES }
-        cmd: docker build -f services/{{.ITEM}}/deploy/Dockerfile -t {{.ITEM}}:{{.DOCKER_TAG}} .
-    silent: true
-
-  docker:run:
-    desc: Запуск контейнеров (task docker:run SERVICE=order-service)
-    requires:
-      vars: [SERVICE]
-    cmds:
-      - docker run --rm -p 8080:8080
-        -e USE_MEMORY=true
-        -e JWT_SECRET=dev-jwt-secret-minimum-32-characters-long
-        -e TLS_CERT_FILE=/certs/server.crt
-        -e TLS_KEY_FILE=/certs/server.key
-        -e TLS_CLIENT_CA_FILE=/certs/ca.crt
-        {{.SERVICE}}:{{.DOCKER_TAG}}
-    silent: true
-
-  certs:generate:
+  generate:certs:
     desc: Generate dev TLS/mTLS certificates
     cmds:
       - bash scripts/certs/generate.sh
+    silent: true
+
+  certs:generate:
+    desc: Alias for generate:certs
+    cmds:
+      - task: generate:certs
     silent: true
 
   jwt:mint:
@@ -97,35 +71,98 @@ tasks:
       - go run ./scripts/jwt/mint.go {{.USER_ID}}
     silent: true
 
-  infra:up:
-    desc: Поднять инфраструктуру (PG, Redis, NATS)
-    deps: [certs:generate, ensure:env]
+  lint:
+    desc: Линтинг кода
     cmds:
-      - docker compose --env-file {{.COMPOSE_ENV_FILE}} up -d postgres redis nats
+      - cmd: cd pkg && GOWORK=off golangci-lint run ./... --fix --max-same-issues=0
+      - for: { var: SERVICES }
+        cmd: golangci-lint run ./services/{{.ITEM}}/... --fix --max-same-issues=0
+      - golangci-lint run ./scripts/ui/... --fix --max-same-issues=0
     silent: true
 
-  obs:up:
-    desc: Поднять полный стек наблюдаемости
-    deps: [certs:generate, ensure:env]
+  test:unit:
+    desc: Юнит-тестирование
+    cmds:
+      - cmd: cd pkg && GOWORK=off go test -v -race ./...
+      - for: { var: SERVICES }
+        cmd: go test -v -race ./services/{{.ITEM}}/...
+      - go test -v -race ./scripts/ui/...
+    silent: true
+
+  test:integration:
+    desc: Интеграционное тестирование (Testcontainers)
+    cmds:
+      - for: { var: SERVICES }
+        cmd: go test -tags=integration -timeout 10m ./services/{{.ITEM}}/...
+    silent: true
+
+  test:e2e:
+    desc: Сквозные E2E-тесты (Testcontainers + in-process сервисы)
+    cmds:
+      - go test -tags=integration -timeout 15m ./tests/e2e/...
+    silent: true
+
+  test:
+    desc: Полный набор тестов
+    cmds:
+      - task: test:unit
+      - task: test:integration
+      - task: test:e2e
+    silent: true
+
+  build:
+    desc: Сборка бинарников сервисов
+    cmds:
+      - for: { var: SERVICES }
+        cmd: go build -o bin/{{.ITEM}} ./services/{{.ITEM}}/cmd/main.go
+      - go build -o bin/ui ./scripts/ui
+    silent: true
+
+  ui:run:
+    desc: Запуск demo UI локально (нужен demo:up или order-service)
+    deps: [ensure:env]
+    env:
+      UI_HTTP_ADDR: ${UI_HTTP_ADDR:-:8081}
+      ORDER_HTTP_URL: ${ORDER_HTTP_URL:-https://localhost:8080}
+      ORDER_GRPC_ADDR: ${ORDER_GRPC_ADDR:-localhost:50052}
+      TLS_CA_FILE: ${TLS_CA_FILE:-deploy/certs/ca/ca.crt}
+      TLS_SKIP_VERIFY: ${TLS_SKIP_VERIFY:-true}
+      UI_SESSION_SECRET: ${UI_SESSION_SECRET:-dev-ui-session-secret-minimum-32-chars}
+    cmds:
+      - go run ./scripts/ui
+    silent: true
+
+  docker:build:
+    desc: Сборка dev-образов
+    deps: [generate:certs]
+    cmds:
+      - for: { var: SERVICES }
+        cmd: docker build -f services/{{.ITEM}}/deploy/Dockerfile -t {{.ITEM}}:{{.DOCKER_TAG}} .
+      - docker build -f scripts/ui/deploy/Dockerfile -t ui:{{.DOCKER_TAG}} .
+    silent: true
+
+  demo:up:
+    desc: Поднять полный demo-стек (сервисы, UI, observability)
+    deps: [generate:certs, ensure:env]
     cmds:
       - docker compose --env-file {{.COMPOSE_ENV_FILE}} up -d --build
     silent: true
 
-  obs:down:
-    desc: Остановить стек наблюдаемости
-    deps: [ensure:env]
-    cmds:
-      - docker compose --env-file {{.COMPOSE_ENV_FILE}} down -v
-    silent: true
-
-  obs:demo:
-    desc: Нагрузочный демо-сценарий для метрик и алертов
+  demo:traffic:
+    desc: Нагрузочный demo-сценарий для метрик и алертов
     cmds:
       - bash scripts/obs/demo.sh
     silent: true
 
-  infra:down:
-    desc: Остановить инфраструктуру
+  demo:down:
+    desc: Остановить demo-стек (volumes сохраняются)
+    deps: [ensure:env]
+    cmds:
+      - docker compose --env-file {{.COMPOSE_ENV_FILE}} down
+    silent: true
+
+  demo:reset:
+    desc: Полностью удалить demo-стек и volumes
     deps: [ensure:env]
     cmds:
       - docker compose --env-file {{.COMPOSE_ENV_FILE}} down -v
