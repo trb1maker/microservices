@@ -1,0 +1,21 @@
+FROM golang:1.26.4-alpine AS builder
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o store-service ./cmd/store-service
+
+FROM scratch
+
+EXPOSE 9092
+
+COPY --from=builder /src/store-service /store-service
+COPY deploy/certs/store-service/client.crt /certs/client.crt
+COPY deploy/certs/store-service/client.key /certs/client.key
+COPY deploy/certs/ca/ca.crt /certs/ca.crt
+
+ENTRYPOINT ["/store-service"]

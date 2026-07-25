@@ -1,0 +1,21 @@
+FROM golang:1.26.4-alpine AS builder
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o analytics-service ./cmd/analytics-service
+
+FROM scratch
+
+EXPOSE 9094
+
+COPY --from=builder /src/analytics-service /analytics-service
+COPY deploy/certs/analytics-service/client.crt /certs/client.crt
+COPY deploy/certs/analytics-service/client.key /certs/client.key
+COPY deploy/certs/ca/ca.crt /certs/ca.crt
+
+ENTRYPOINT ["/analytics-service"]

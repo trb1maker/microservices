@@ -1,4 +1,4 @@
-// go:build integration
+//go:build e2e
 
 package e2e
 
@@ -27,11 +27,11 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	analyticstestwire "github.com/trb1maker/microservices/services/analytics-service/testwire"
-	notificationtestwire "github.com/trb1maker/microservices/services/notification-service/testwire"
-	ordertestwire "github.com/trb1maker/microservices/services/order-service/testwire"
-	paymenttestwire "github.com/trb1maker/microservices/services/payment-service/testwire"
-	storetestwire "github.com/trb1maker/microservices/services/store-service/testwire"
+	analyticstestwire "github.com/trb1maker/microservices/internal/analytics-service/testwire"
+	notificationtestwire "github.com/trb1maker/microservices/internal/notification-service/testwire"
+	ordertestwire "github.com/trb1maker/microservices/internal/order-service/testwire"
+	paymenttestwire "github.com/trb1maker/microservices/internal/payment-service/testwire"
+	storetestwire "github.com/trb1maker/microservices/internal/store-service/testwire"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"

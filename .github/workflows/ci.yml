@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: write
@@ -14,143 +18,8 @@ env:
   GO_VERSION: "1.26.4"
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      services: ${{ steps.services.outputs.services }}
-      e2e: ${{ steps.e2e.outputs.e2e }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Detect affected services
-        id: services
-        shell: bash
-        run: |
-          all_services=$(find services -mindepth 2 -maxdepth 2 -name go.mod -exec dirname {} \; | xargs -n1 basename | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
-
-          if [ "$all_services" = "[]" ] || [ -z "$all_services" ]; then
-            echo "services=[]" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "services=$all_services" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          base_ref="${{ github.base_ref }}"
-          git fetch origin "${base_ref}" --depth=1
-
-          changed_files=$(git diff --name-only "origin/${base_ref}"...HEAD)
-
-          shared_changed=false
-          while IFS= read -r file; do
-            [ -z "$file" ] && continue
-            case "$file" in
-              .golangci.yaml|go.work|go.work.sum|Taskfile.yml|docker-compose.yml)
-                shared_changed=true
-                break
-                ;;
-              pkg/*|api/*)
-                shared_changed=true
-                break
-                ;;
-              .github/workflows/*)
-                shared_changed=true
-                break
-                ;;
-            esac
-          done <<< "$changed_files"
-
-          if [ "$shared_changed" = true ]; then
-            echo "services=$all_services" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          affected=()
-          while IFS= read -r service; do
-            [ -z "$service" ] && continue
-            if echo "$changed_files" | grep -qE "^services/${service}/"; then
-              affected+=("$service")
-            fi
-          done < <(echo "$all_services" | jq -r '.[]')
-
-          if [ "${#affected[@]}" -eq 0 ]; then
-            echo "services=[]" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          services_json=$(printf '%s\n' "${affected[@]}" | jq -R . | jq -s -c .)
-          echo "services=$services_json" >> "$GITHUB_OUTPUT"
-
-      - name: Detect E2E changes
-        id: e2e
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "e2e=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          base_ref="${{ github.base_ref }}"
-          git fetch origin "${base_ref}" --depth=1
-          changed_files=$(git diff --name-only "origin/${base_ref}"...HEAD)
-
-          e2e_changed=false
-          while IFS= read -r file; do
-            [ -z "$file" ] && continue
-            case "$file" in
-              tests/e2e/*|pkg/*|api/*|go.work|go.work.sum|Taskfile.yml|docker-compose.yml|.github/workflows/*)
-                e2e_changed=true
-                break
-                ;;
-            esac
-          done <<< "$changed_files"
-
-          if [ "$e2e_changed" = true ]; then
-            echo "e2e=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          while IFS= read -r service; do
-            [ -z "$service" ] && continue
-            if echo "$changed_files" | grep -qE "^services/${service}/"; then
-              echo "e2e=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          done < <(find services -mindepth 2 -maxdepth 2 -name go.mod -exec dirname {} \; | xargs -n1 basename | sort -u)
-
-          echo "e2e=false" >> "$GITHUB_OUTPUT"
-
-  lint-pkg:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: pkg/go.sum
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        env:
-          GOWORK: off
-        with:
-          version: latest
-          working-directory: pkg
-          args: --config ../.golangci.yaml ./...
-
   ci:
     runs-on: ubuntu-latest
-    needs: [changes, lint-pkg]
-    if: needs.changes.outputs.services != '[]'
-    strategy:
-      fail-fast: false
-      matrix:
-        service: ${{ fromJson(needs.changes.outputs.services) }}
     steps:
       - uses: actions/checkout@v6
 
@@ -158,94 +27,29 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: |
-            pkg/go.sum
-            services/${{ matrix.service }}/go.sum
-            go.work.sum
+            go.sum
+            golangci-lint.sum
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: latest
-          args: --config .golangci.yaml ./services/${{ matrix.service }}/...
+      - uses: arduino/setup-task@v2
 
-      - name: Unit tests
-        run: |
-          cd pkg && GOWORK=off go test -race ./...
-          go test -race ./services/${{ matrix.service }}/...
-
-      - name: Integration tests
-        run: |
-          if [ -d "services/${{ matrix.service }}/internal/integration" ]; then
-            go test -tags=integration -timeout 10m ./services/${{ matrix.service }}/internal/integration/...
-          fi
-
-      - name: Build binary
-        run: go build -o bin/${{ matrix.service }} ./services/${{ matrix.service }}/cmd/main.go
-
-      - name: Docker build and smoke test
-        id: docker
-        run: |
-          dockerfile="services/${{ matrix.service }}/deploy/Dockerfile"
-          if [ ! -f "$dockerfile" ]; then
-            echo "has_image=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          bash scripts/certs/generate.sh
-          docker build -f "$dockerfile" -t ${{ matrix.service }}:ci .
-
-          container_name="${{ matrix.service }}-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          docker run -d --name "$container_name" \
-            -e USE_MEMORY=true \
-            -e JWT_SECRET=ci-jwt-secret-minimum-32-characters-long \
-            -e TLS_CERT_FILE=/certs/server.crt \
-            -e TLS_KEY_FILE=/certs/server.key \
-            -e TLS_CLIENT_CA_FILE=/certs/ca.crt \
-            -p 8080:8080 ${{ matrix.service }}:ci
-
-          for _ in $(seq 1 10); do
-            if curl -kfsS https://localhost:8080/health; then
-              docker rm -f "$container_name"
-              echo "has_image=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            sleep 1
-          done
-
-          docker logs "$container_name"
-          docker rm -f "$container_name"
-          exit 1
+      - name: Run CI
+        run: task ci
 
       - name: Log in to GHCR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.docker.outputs.has_image == 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push image to GHCR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.docker.outputs.has_image == 'true'
+      - name: Push images to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          image="ghcr.io/${{ github.repository }}/${{ matrix.service }}"
-          docker tag ${{ matrix.service }}:ci "${image}:${{ github.sha }}"
-          docker tag ${{ matrix.service }}:ci "${image}:latest"
-          docker push "${image}:${{ github.sha }}"
-          docker push "${image}:latest"
-
-  e2e:
-    runs-on: ubuntu-latest
-    needs: changes
-    if: needs.changes.outputs.e2e == 'true'
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: |
-            tests/e2e/go.sum
-            go.work.sum
-
-      - name: E2E tests
-        run: go test -tags=integration -timeout 15m ./tests/e2e/...
+          for svc in analytics-service notification-service order-service payment-service store-service; do
+            image="ghcr.io/${{ github.repository }}/${svc}"
+            docker tag "${svc}:ci" "${image}:${{ github.sha }}"
+            docker tag "${svc}:ci" "${image}:latest"
+            docker push "${image}:${{ github.sha }}"
+            docker push "${image}:latest"
+          done

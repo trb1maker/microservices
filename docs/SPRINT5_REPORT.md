@@ -81,7 +81,7 @@ NATS consumer подписан на:
 - `orders.finalized`, `orders.cancelled`
 - `payment.succeeded`, `payment.refund_succeeded`
 
-Уведомления пишутся в **stdout** через structured logging (`slog`) — [notifier/slog_notifier.go](../services/notification-service/internal/adapters/notifier/slog_notifier.go).
+Уведомления пишутся в **stdout** через structured logging (`slog`) — [notifier/slog_notifier.go](../internal/notification-service/internal/adapters/notifier/slog_notifier.go).
 
 ---
 
@@ -127,7 +127,7 @@ Order Service слушает `store.items_reserved`, `store.reservation_failed`,
 
 ## 7. Health dashboard
 
-`GET /health` с заголовком `Accept: text/html` возвращает HTML-страницу ([status_page.go](../services/order-service/internal/adapters/http/status_page.go)):
+`GET /health` с заголовком `Accept: text/html` возвращает HTML-страницу ([status_page.go](../internal/order-service/internal/adapters/http/status_page.go)):
 
 - liveness Order Service + readiness (PostgreSQL, Redis, NATS)
 - remote checks Payment (`:9091/ready`) и Store (`:9092/ready`)
@@ -144,7 +144,7 @@ curl -k -H 'Accept: text/html' https://localhost:8080/health
 
 ## 8. Demo UI (HTMX gateway)
 
-Go UI gateway в [scripts/ui/](../scripts/ui/):
+Go UI gateway в [tests/ui/](../tests/ui/):
 
 - Login → session cookie (JWT не попадает в браузерный JS)
 - Корзина, checkout, pay, cancel через REST к order-service
@@ -188,7 +188,7 @@ Go UI gateway в [scripts/ui/](../scripts/ui/):
 
 ### Order integration
 
-`TestIntegration_SagaHappyPath`, `TestIntegration_CancelOrder`, `TestIntegration_CancelPaidOrder`, `TestIntegration_ListOrders`.
+`TestIntegration_PayToConfirmed_SimulatedStoreConfirm`, `TestIntegration_CancelOrder`, `TestIntegration_CancelPaidOrder`, `TestIntegration_ListOrders`.
 
 ---
 
@@ -205,7 +205,7 @@ task demo:up
 Ключевые исправления compose:
 
 - NATS 2.14 TLS flags (`--tlscacert`, `--tlsverify`)
-- server cert для `payment-service` в `scripts/certs/generate.sh`
+- server cert для `payment-service` в `scripts/generate-certs.sh`
 - order→payment gRPC с **client** certs (`NATS_TLS_*` pattern)
 - Dockerfiles копируют все `go.mod` workspace перед `go mod download`
 
@@ -216,13 +216,13 @@ task demo:up
 | Путь                         | Назначение                              |
 | ---------------------------- | --------------------------------------- |
 | `api/payment/`, `api/order/` | proto-схемы                             |
-| `pkg/proto/`                 | сгенерированный Go (`task proto:gen`)   |
+| `internal/platform/proto/`                 | сгенерированный Go (`task proto:gen`)   |
 | `pkg/health/`                | shared HTTP health handlers             |
-| `services/payment-service/`  | gRPC + PostgreSQL + NATS                |
-| `services/store-service/`    | MongoDB + NATS worker                   |
-| `services/notification-service/` | NATS consumer + slog notifier       |
-| `services/analytics-service/`    | MinIO receipts + PG summaries       |
-| `scripts/ui/`                | HTMX demo gateway                       |
+| `internal/payment-service/`  | gRPC + PostgreSQL + NATS                |
+| `internal/store-service/`    | MongoDB + NATS worker                   |
+| `internal/notification-service/` | NATS consumer + slog notifier       |
+| `internal/analytics-service/`    | MinIO receipts + PG summaries       |
+| `tests/ui/`                | HTMX demo gateway                       |
 | `tests/e2e/`                 | сквозные E2E-тесты                      |
 | `docs/*-SERVICE.md`          | доменные описания сервисов              |
 

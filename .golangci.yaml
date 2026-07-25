@@ -66,36 +66,44 @@ linters:
               desc: Use math/rand/v2
         domain:
           files:
-            - "**/internal/domain/**/*.go"
+            - "internal/*/domain/**/*.go"
             - "!**/*_test.go"
           allow:
             - $gostd
             - github.com/google/uuid
         application:
           files:
-            - "**/internal/app/**/*.go"
+            - "internal/*/app/**/*.go"
             - "!**/*_test.go"
           deny:
-            - pkg: github.com/trb1maker/microservices/services/*/internal/adapters/**
+            - pkg: github.com/trb1maker/microservices/internal/*/adapters/**
               desc: application layer must not depend on adapters
-            - pkg: github.com/trb1maker/microservices/services/*/cmd/**
+            - pkg: github.com/trb1maker/microservices/cmd/**
               desc: application layer must not depend on the composition root
         adapters:
           files:
-            - "**/internal/adapters/**/*.go"
+            - "internal/*/adapters/**/*.go"
             - "!**/*_test.go"
           deny:
-            - pkg: github.com/trb1maker/microservices/services/*/internal/app/**
+            - pkg: github.com/trb1maker/microservices/internal/*/app/**
               desc: adapters layer must not depend on the application layer
-            - pkg: github.com/trb1maker/microservices/services/*/cmd/**
+            - pkg: github.com/trb1maker/microservices/cmd/**
               desc: adapters layer must not depend on the composition root
         shared:
           files:
-            - "pkg/**/*.go"
+            - "internal/platform/**/*.go"
             - "!**/*_test.go"
           deny:
-            - pkg: github.com/trb1maker/microservices/services/**
-              desc: shared pkg must not depend on services
+            - pkg: github.com/trb1maker/microservices/internal/analytics-service/**
+              desc: shared platform must not depend on services
+            - pkg: github.com/trb1maker/microservices/internal/notification-service/**
+              desc: shared platform must not depend on services
+            - pkg: github.com/trb1maker/microservices/internal/order-service/**
+              desc: shared platform must not depend on services
+            - pkg: github.com/trb1maker/microservices/internal/payment-service/**
+              desc: shared platform must not depend on services
+            - pkg: github.com/trb1maker/microservices/internal/store-service/**
+              desc: shared platform must not depend on services
     funlen:
       lines: 80
       statements: 50
@@ -113,11 +121,43 @@ linters:
         linters:
           - funlen
           - gocognit
-      - path: internal/integration/
+      - path: tests/integration/
         linters:
           - goconst
           - mnd
-      - path: internal/adapters/mongodb/repository\.go
+      - path: tests/e2e/
+        linters:
+          - err113
+          - errcheck
+          - funlen
+          - goconst
+          - gosec
+          - mnd
+          - noctx
+          - staticcheck
+          - testifylint
+          - wrapcheck
+      - path: tests/ui/
+        linters:
+          - err113
+          - errcheck
+          - funlen
+          - goconst
+          - gosec
+          - mnd
+          - noctx
+          - staticcheck
+          - testifylint
+          - wrapcheck
+      - path: deploy/observability/
+        linters:
+          - depguard
+          - errcheck
+          - gosec
+      - path: scripts/
+        linters:
+          - mnd
+      - path: internal/.*/adapters/mongodb/repository\.go
         linters:
           - mnd
 

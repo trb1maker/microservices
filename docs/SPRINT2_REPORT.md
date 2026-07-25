@@ -45,7 +45,7 @@ migrations/               — goose SQL + migrate.go
 
 ```bash
 task infra:up
-# скопировать services/order-service/.env.example → .env или экспортировать переменные
+# скопировать .env.example → .env или экспортировать переменные
 task run SERVICE=order-service
 
 curl localhost:8080/health
@@ -80,7 +80,7 @@ Workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 3. Проверка готовности: `GET /ready` → `200`.
 4. Подготовка данных: для каждого виртуального пользователя — `POST /cart/items` (1 позиция).
 5. Атака: `POST /orders` с уникальным `X-User-ID` на каждый запрос (vegeta targets).
-6. Скрипт: [`scripts/load/orders.sh`](../scripts/load/orders.sh).
+6. Скрипт: [`scripts/load-orders.sh`](../scripts/load-orders.sh).
 
 Параметры прогона:
 
@@ -114,12 +114,12 @@ Workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 
 ```bash
 task infra:up
-# в отдельном терминале — экспортировать переменные из services/order-service/.env.example
+# в отдельном терминале — экспортировать переменные из .env.example
 task run SERVICE=order-service
 
 # после GET /ready == 200
 go install github.com/tsenart/vegeta@latest
-PREP_COUNT=350 RATE=20 DURATION=15s ./scripts/load/orders.sh
+PREP_COUNT=350 RATE=20 DURATION=15s ./scripts/load-orders.sh
 ```
 
 ---

@@ -2,6 +2,8 @@
 
 version: "3"
 
+dotenv: ['.env.example']
+
 vars:
   SERVICES:
     - analytics-service
@@ -10,160 +12,93 @@ vars:
     - payment-service
     - store-service
   DOCKER_TAG: dev
-  COMPOSE_ENV_FILE: .env
+  COMPOSE_ENV_FILE: .env.example
+  GOLANGCI: go tool -modfile=golangci-lint.mod golangci-lint
 
 tasks:
-  ensure:env:
-    desc: Создать .env из .env.example, если отсутствует
-    cmds:
-      - test -f {{.COMPOSE_ENV_FILE}} || cp .env.example {{.COMPOSE_ENV_FILE}}
-    silent: true
-
   fmt:
     desc: Форматирование кода
-    cmds:
-      - cmd: cd pkg && GOWORK=off golangci-lint fmt ./...
-      - for: { var: SERVICES }
-        cmd: golangci-lint fmt ./services/{{.ITEM}}/...
-      - golangci-lint fmt ./scripts/ui/...
-    silent: true
+    cmd: "{{.GOLANGCI}} fmt ./..."
 
   gen:proto:
-    desc: Генерация Go-кода из proto-схем (api/ → pkg/proto/)
-    cmds:
-      - |
-        set -e
-        for f in $(find api -name '*.proto' | sort); do
-          relpath="${f#api/}"
-          protoc --proto_path=api \
-            --go_out=pkg --go_opt=module=github.com/trb1maker/microservices/pkg \
-            --go-grpc_out=pkg --go-grpc_opt=module=github.com/trb1maker/microservices/pkg \
-            "$relpath"
-        done
-    silent: true
+    desc: Генерация Go-кода из proto-схем
+    cmd: bash scripts/generate-proto.sh
 
   gen:swagger:
     desc: Генерация Swagger для order-service
-    cmds:
-      - swag init -g cmd/main.go -o docs/swagger --parseDependency --parseInternal
-    dir: services/order-service
-    silent: true
+    cmd: swag init -g cmd/order-service/main.go -o internal/order-service/docs/swagger --parseDependency --parseInternal
 
   generate:certs:
     desc: Generate dev TLS/mTLS certificates
-    cmds:
-      - bash scripts/certs/generate.sh
-    silent: true
-
-  certs:generate:
-    desc: Alias for generate:certs
-    cmds:
-      - task: generate:certs
-    silent: true
+    cmd: bash scripts/generate-certs.sh
 
   jwt:mint:
-    desc: Mint JWT for user UUID (task jwt:mint USER_ID=<uuid>)
+    desc: Mint JWT for user UUID
     requires:
       vars: [USER_ID]
-    env:
-      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-minimum-32-characters-long}
-    cmds:
-      - go run ./scripts/jwt/mint.go {{.USER_ID}}
-    silent: true
+    cmd: go run ./scripts/mint-jwt.go {{.USER_ID}}
 
   lint:
-    desc: Линтинг кода
-    cmds:
-      - cmd: cd pkg && GOWORK=off golangci-lint run ./... --fix --max-same-issues=0
-      - for: { var: SERVICES }
-        cmd: golangci-lint run ./services/{{.ITEM}}/... --fix --max-same-issues=0
-      - golangci-lint run ./scripts/ui/... --fix --max-same-issues=0
-    silent: true
+    desc: Линтинг
+    cmd: "{{.GOLANGCI}} run --config .golangci.yaml ./..."
+
+  lint:fix:
+    desc: Линтинг с автоисправлением
+    cmd: "{{.GOLANGCI}} run --config .golangci.yaml ./... --fix --max-same-issues=0"
 
   test:unit:
     desc: Юнит-тестирование
-    cmds:
-      - cmd: cd pkg && GOWORK=off go test -v -race ./...
-      - for: { var: SERVICES }
-        cmd: go test -v -race ./services/{{.ITEM}}/...
-      - go test -v -race ./scripts/ui/...
-    silent: true
+    cmd: go test -v -race ./cmd/... ./internal/... ./tests/ui/...
 
   test:integration:
-    desc: Интеграционное тестирование (Testcontainers)
-    cmds:
-      - for: { var: SERVICES }
-        cmd: go test -tags=integration -timeout 10m ./services/{{.ITEM}}/...
-    silent: true
+    desc: Интеграционные тесты по сервисам
+    cmd: go test -tags=integration -timeout 10m ./tests/integration/...
 
   test:e2e:
-    desc: Сквозные E2E-тесты (Testcontainers + in-process сервисы)
-    cmds:
-      - go test -tags=integration -timeout 15m ./tests/e2e/...
-    silent: true
+    desc: Сквозные saga-тесты всех сервисов
+    cmd: go test -tags=e2e -timeout 15m ./tests/e2e/...
 
-  test:
-    desc: Полный набор тестов
-    cmds:
-      - task: test:unit
-      - task: test:integration
-      - task: test:e2e
-    silent: true
-
-  build:
+  build:apps:
     desc: Сборка бинарников сервисов
     cmds:
       - for: { var: SERVICES }
-        cmd: go build -o bin/{{.ITEM}} ./services/{{.ITEM}}/cmd/main.go
-      - go build -o bin/ui ./scripts/ui
-    silent: true
+        cmd: go build -o bin/{{.ITEM}} ./cmd/{{.ITEM}}
 
-  ui:run:
-    desc: Запуск demo UI локально (нужен demo:up или order-service)
-    deps: [ensure:env]
-    env:
-      UI_HTTP_ADDR: ${UI_HTTP_ADDR:-:8081}
-      ORDER_HTTP_URL: ${ORDER_HTTP_URL:-https://localhost:8080}
-      ORDER_GRPC_ADDR: ${ORDER_GRPC_ADDR:-localhost:50052}
-      TLS_CA_FILE: ${TLS_CA_FILE:-deploy/certs/ca/ca.crt}
-      TLS_SKIP_VERIFY: ${TLS_SKIP_VERIFY:-true}
-      UI_SESSION_SECRET: ${UI_SESSION_SECRET:-dev-ui-session-secret-minimum-32-chars}
-    cmds:
-      - go run ./scripts/ui
-    silent: true
-
-  docker:build:
-    desc: Сборка dev-образов
+  build:images:
+    desc: Сборка dev-образов сервисов
     deps: [generate:certs]
     cmds:
       - for: { var: SERVICES }
-        cmd: docker build -f services/{{.ITEM}}/deploy/Dockerfile -t {{.ITEM}}:{{.DOCKER_TAG}} .
-      - docker build -f scripts/ui/deploy/Dockerfile -t ui:{{.DOCKER_TAG}} .
-    silent: true
+        cmd: docker build -f deploy/docker/{{.ITEM}} -t {{.ITEM}}:{{.DOCKER_TAG}} .
+
+  ci:
+    desc: Полный CI pipeline
+    cmds:
+      - task: lint
+      - task: test:unit
+      - task: test:integration
+      - task: test:e2e
+      - task: build:images
+        vars:
+          DOCKER_TAG: ci
+      - bash scripts/smoke-order-service.sh
 
   demo:up:
-    desc: Поднять полный demo-стек (сервисы, UI, observability)
-    deps: [generate:certs, ensure:env]
-    cmds:
-      - docker compose --env-file {{.COMPOSE_ENV_FILE}} up -d --build
-    silent: true
+    desc: Поднять demo-стек
+    deps: [generate:certs]
+    cmd: docker compose --env-file {{.COMPOSE_ENV_FILE}} up -d --build
 
   demo:traffic:
     desc: Нагрузочный demo-сценарий для метрик и алертов
-    cmds:
-      - bash scripts/obs/demo.sh
-    silent: true
+    cmd: bash scripts/demo-traffic.sh
 
+  demo:ui:
+    desc: Запуск demo UI локально
+    cmds:
+      - go build -o bin/ui ./tests/ui
+      - go run ./tests/ui
+  
   demo:down:
-    desc: Остановить demo-стек (volumes сохраняются)
-    deps: [ensure:env]
-    cmds:
-      - docker compose --env-file {{.COMPOSE_ENV_FILE}} down
-    silent: true
-
-  demo:reset:
-    desc: Полностью удалить demo-стек и volumes
-    deps: [ensure:env]
+    desc: Остановить demo-стек
     cmds:
       - docker compose --env-file {{.COMPOSE_ENV_FILE}} down -v
-    silent: true
