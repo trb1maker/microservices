@@ -20,7 +20,7 @@ jobs:
       services: ${{ steps.services.outputs.services }}
       e2e: ${{ steps.e2e.outputs.e2e }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -133,9 +133,9 @@ jobs:
       matrix:
         service: ${{ fromJson(needs.changes.outputs.services) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: |
@@ -144,7 +144,7 @@ jobs:
             go.work.sum
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           version: latest
           args: --config .golangci.yaml ./pkg/... ./services/${{ matrix.service }}/...
@@ -199,7 +199,7 @@ jobs:
 
       - name: Log in to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.docker.outputs.has_image == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -219,9 +219,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.e2e == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: |
