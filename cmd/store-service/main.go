@@ -12,11 +12,13 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	goredis "github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/trb1maker/microservices/internal/store-service/adapters/mongodb"
 	natsadapter "github.com/trb1maker/microservices/internal/store-service/adapters/nats"
+	redisadapter "github.com/trb1maker/microservices/internal/store-service/adapters/redis"
 	"github.com/trb1maker/microservices/internal/store-service/app"
 	"github.com/trb1maker/microservices/internal/store-service/config"
 
@@ -85,17 +87,41 @@ func run() error {
 	}
 	defer nc.Close()
 
-	storeSvc, worker, err := initStoreService(db, nc, cfg)
+	redisClient, err := initRedis(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("init redis: %w", err)
+	}
+	defer func() { _ = redisClient.Close() }()
+
+	storeSvc, worker, err := initStoreService(db, nc, redisClient, cfg)
 	if err != nil {
 		return fmt.Errorf("init store service: %w", err)
 	}
 
+	if err := startMetricsServer(ctx, cfg, client, redisClient, nc, worker); err != nil {
+		return err
+	}
+
+	return serveWorker(ctx, nc, worker, storeSvc, shutdownTracer, logger)
+}
+
+func startMetricsServer(
+	ctx context.Context,
+	cfg *config.Config,
+	mongoClient *mongo.Client,
+	redisClient *goredis.Client,
+	nc *nats.Conn,
+	worker *natsadapter.Worker,
+) error {
 	metricsServer := metrics.NewServer("store_service", cfg.MetricsPath)
 	mux := metricsServer.Mux()
 	mux.HandleFunc("GET /health", health.LivenessHandler())
 	mux.HandleFunc("GET /ready", health.ReadinessHandler(health.NewChecker(map[string]health.CheckFunc{
 		"mongodb": func(ctx context.Context) error {
-			return client.Ping(ctx, nil)
+			return mongoClient.Ping(ctx, nil)
+		},
+		"redis": func(ctx context.Context) error {
+			return redisClient.Ping(ctx).Err()
 		},
 		"nats": func(context.Context) error {
 			if !nc.IsConnected() {
@@ -113,9 +139,9 @@ func run() error {
 	if _, err := metricsServer.ListenAndServeWithMux(ctx, cfg.MetricsAddr, mux); err != nil {
 		return fmt.Errorf("start metrics server: %w", err)
 	}
-	slog.Info("metrics server started", slog.String("addr", cfg.MetricsAddr), slog.String("path", cfg.MetricsPath))
 
-	return serveWorker(ctx, nc, worker, storeSvc, shutdownTracer, logger)
+	slog.Info("metrics server started", slog.String("addr", cfg.MetricsAddr), slog.String("path", cfg.MetricsPath))
+	return nil
 }
 
 func initMongo(ctx context.Context, cfg *config.Config) (*mongo.Client, *mongo.Database, error) {
@@ -166,7 +192,18 @@ func initNATS(cfg *config.Config) (*nats.Conn, error) {
 	return nc, nil
 }
 
-func initStoreService(db *mongo.Database, nc *nats.Conn, cfg *config.Config) (*app.StoreService, *natsadapter.Worker, error) {
+func initRedis(ctx context.Context, cfg *config.Config) (*goredis.Client, error) {
+	client := goredis.NewClient(&goredis.Options{Addr: cfg.RedisAddr})
+	if err := client.Ping(ctx).Err(); err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("ping redis: %w", err)
+	}
+
+	slog.Info("connected to Redis", slog.String("addr", cfg.RedisAddr))
+	return client, nil
+}
+
+func initStoreService(db *mongo.Database, nc *nats.Conn, redisClient *goredis.Client, cfg *config.Config) (*app.StoreService, *natsadapter.Worker, error) {
 	productRepo := mongodb.NewProductRepository(db)
 	stockRepo := mongodb.NewStockRepository(db)
 
@@ -178,7 +215,11 @@ func initStoreService(db *mongo.Database, nc *nats.Conn, cfg *config.Config) (*a
 		cfg.ReservationReleasedSubject,
 	)
 
-	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub)
+	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, redisadapter.NewStockLocker(redisClient, redisadapter.StockLockerConfig{
+		TTL:        cfg.StockLockTTL,
+		RetryCount: cfg.StockLockRetryCount,
+		RetryDelay: cfg.StockLockRetryDelay,
+	}))
 	worker := natsadapter.NewWorker(storeSvc)
 	if err := worker.SubscribeAll(nc, cfg.ReserveItemsSubject, cfg.ConfirmOrderSubject, cfg.ReleaseReservationSubject); err != nil {
 		return nil, nil, fmt.Errorf("subscribe to NATS: %w", err)

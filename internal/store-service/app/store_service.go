@@ -2,16 +2,25 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
+	"github.com/trb1maker/microservices/internal/platform/redisx"
 	"github.com/trb1maker/microservices/internal/store-service/domain"
 )
 
 var (
 	errInvalidQuantity      = fmt.Errorf("invalid quantity")
 	errInsufficientReserved = fmt.Errorf("insufficient reserved stock")
+	errLockNotAcquired      = redisx.ErrLockNotAcquired
+)
+
+const (
+	criticalLockAttempts = 5
+	criticalLockDelay    = 200 * time.Millisecond
 )
 
 // StoreService implements the store business logic.
@@ -19,14 +28,20 @@ type StoreService struct {
 	products ProductRepository
 	stocks   StockRepository
 	events   EventPublisher
+	locker   StockLocker
 }
 
 // NewStoreService creates a new StoreService.
-func NewStoreService(products ProductRepository, stocks StockRepository, events EventPublisher) *StoreService {
+func NewStoreService(products ProductRepository, stocks StockRepository, events EventPublisher, locker StockLocker) *StoreService {
+	if locker == nil {
+		locker = NoopStockLocker{}
+	}
+
 	return &StoreService{
 		products: products,
 		stocks:   stocks,
 		events:   events,
+		locker:   locker,
 	}
 }
 
@@ -44,6 +59,17 @@ func (s *StoreService) ReserveItems(ctx context.Context, req ReserveItemsRequest
 		return fmt.Errorf("%w: %d", errInvalidQuantity, req.Quantity)
 	}
 
+	err := s.locker.WithLock(ctx, req.ProductID, func(ctx context.Context) error {
+		return s.reserveItemsLocked(ctx, req)
+	})
+	if err != nil {
+		return s.handleLockError(ctx, req, err)
+	}
+
+	return nil
+}
+
+func (s *StoreService) reserveItemsLocked(ctx context.Context, req ReserveItemsRequest) error {
 	// Verify product exists
 	_, err := s.products.Get(ctx, domain.ProductID(req.ProductID))
 	if err != nil {
@@ -97,28 +123,35 @@ type ConfirmOrderRequest struct {
 
 // ConfirmOrder confirms an order (deducts reserved stock).
 func (s *StoreService) ConfirmOrder(ctx context.Context, req ConfirmOrderRequest) error {
-	stock, err := s.stocks.Get(ctx, domain.ProductID(req.ProductID))
+	err := s.withCriticalLock(ctx, req.ProductID, func(ctx context.Context) error {
+		stock, err := s.stocks.Get(ctx, domain.ProductID(req.ProductID))
+		if err != nil {
+			return fmt.Errorf("get stock: %w", err)
+		}
+
+		if stock.Reserved < req.Quantity {
+			s.publishReservationFailed(ctx, req.OrderID, req.UserID, req.ProductID, req.Quantity, "reservation not found")
+			return fmt.Errorf("%w: %d < %d", errInsufficientReserved, stock.Reserved, req.Quantity)
+		}
+
+		stock.Confirm(req.Quantity)
+		if err := s.stocks.Update(ctx, stock); err != nil {
+			return fmt.Errorf("update stock: %w", err)
+		}
+
+		slog.Info("order confirmed",
+			slog.String("order_id", req.OrderID),
+			slog.String("product_id", req.ProductID),
+			slog.Int("quantity", req.Quantity),
+		)
+
+		s.publishOrderConfirmed(ctx, req.OrderID, req.UserID)
+
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("get stock: %w", err)
+		return fmt.Errorf("confirm order lock: %w", err)
 	}
-
-	if stock.Reserved < req.Quantity {
-		s.publishReservationFailed(ctx, req.OrderID, req.UserID, req.ProductID, req.Quantity, "reservation not found")
-		return fmt.Errorf("%w: %d < %d", errInsufficientReserved, stock.Reserved, req.Quantity)
-	}
-
-	stock.Confirm(req.Quantity)
-	if err := s.stocks.Update(ctx, stock); err != nil {
-		return fmt.Errorf("update stock: %w", err)
-	}
-
-	slog.Info("order confirmed",
-		slog.String("order_id", req.OrderID),
-		slog.String("product_id", req.ProductID),
-		slog.Int("quantity", req.Quantity),
-	)
-
-	s.publishOrderConfirmed(ctx, req.OrderID, req.UserID)
 
 	return nil
 }
@@ -144,29 +177,95 @@ type ReleaseReservationRequest struct {
 
 // ReleaseReservation releases a reservation (cancels the hold).
 func (s *StoreService) ReleaseReservation(ctx context.Context, req ReleaseReservationRequest) error {
-	stock, err := s.stocks.Get(ctx, domain.ProductID(req.ProductID))
+	err := s.withCriticalLock(ctx, req.ProductID, func(ctx context.Context) error {
+		stock, err := s.stocks.Get(ctx, domain.ProductID(req.ProductID))
+		if err != nil {
+			return fmt.Errorf("get stock: %w", err)
+		}
+
+		if stock.Reserved < req.Quantity {
+			return fmt.Errorf("%w to release: %d < %d", errInsufficientReserved, stock.Reserved, req.Quantity)
+		}
+
+		stock.Release(req.Quantity)
+		if err := s.stocks.Update(ctx, stock); err != nil {
+			return fmt.Errorf("update stock: %w", err)
+		}
+
+		s.publishReservationReleased(ctx, req.OrderID, req.UserID, req.ProductID, req.Quantity)
+
+		slog.Info("reservation released",
+			slog.String("order_id", req.OrderID),
+			slog.String("product_id", req.ProductID),
+			slog.Int("quantity", req.Quantity),
+		)
+
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("get stock: %w", err)
+		return fmt.Errorf("release reservation lock: %w", err)
 	}
-
-	if stock.Reserved < req.Quantity {
-		return fmt.Errorf("%w to release: %d < %d", errInsufficientReserved, stock.Reserved, req.Quantity)
-	}
-
-	stock.Release(req.Quantity)
-	if err := s.stocks.Update(ctx, stock); err != nil {
-		return fmt.Errorf("update stock: %w", err)
-	}
-
-	s.publishReservationReleased(ctx, req.OrderID, req.UserID, req.ProductID, req.Quantity)
-
-	slog.Info("reservation released",
-		slog.String("order_id", req.OrderID),
-		slog.String("product_id", req.ProductID),
-		slog.Int("quantity", req.Quantity),
-	)
 
 	return nil
+}
+
+func (s *StoreService) handleLockError(ctx context.Context, req ReserveItemsRequest, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+
+	if !isLockAcquisitionError(err) {
+		return err
+	}
+
+	reason := "lock unavailable"
+	if errors.Is(err, errLockNotAcquired) {
+		reason = "lock not acquired"
+	}
+
+	s.publishReservationFailed(ctx, req.OrderID, req.UserID, req.ProductID, req.Quantity, reason)
+	return nil
+}
+
+func isLockAcquisitionError(err error) bool {
+	return errors.Is(err, errLockNotAcquired) || strings.Contains(err.Error(), "acquire lock")
+}
+
+func (s *StoreService) withCriticalLock(ctx context.Context, productID string, fn func(context.Context) error) error {
+	var lastErr error
+
+	for attempt := range criticalLockAttempts {
+		if attempt > 0 {
+			if err := sleep(ctx, criticalLockDelay); err != nil {
+				return err
+			}
+		}
+
+		err := s.locker.WithLock(ctx, productID, fn)
+		if err == nil {
+			return nil
+		}
+
+		if !errors.Is(err, errLockNotAcquired) {
+			return fmt.Errorf("critical stock lock: %w", err)
+		}
+
+		lastErr = err
+	}
+
+	return lastErr
+}
+
+func sleep(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("wait for lock: %w", ctx.Err())
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (s *StoreService) publishItemsReserved(ctx context.Context, orderID, userID, productID string, quantity int) {

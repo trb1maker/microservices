@@ -109,7 +109,7 @@ func TestStoreService_ReserveItems_Success(t *testing.T) {
 	productRepo := mongoadapter.NewProductRepository(db)
 	stockRepo := mongoadapter.NewStockRepository(db)
 	eventPub := natsadapter.NewEventPublisher(nc, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
-	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub)
+	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
 
 	worker := natsadapter.NewWorker(storeSvc)
 	err := worker.SubscribeAll(nc, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
@@ -162,7 +162,7 @@ func TestStoreService_ReserveItems_InsufficientStock(t *testing.T) {
 	productRepo := mongoadapter.NewProductRepository(db)
 	stockRepo := mongoadapter.NewStockRepository(db)
 	eventPub := natsadapter.NewEventPublisher(nc, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
-	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub)
+	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
 
 	worker := natsadapter.NewWorker(storeSvc)
 	err := worker.SubscribeAll(nc, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
@@ -216,7 +216,7 @@ func TestStoreService_ConfirmOrder_Success(t *testing.T) {
 	productRepo := mongoadapter.NewProductRepository(db)
 	stockRepo := mongoadapter.NewStockRepository(db)
 	eventPub := natsadapter.NewEventPublisher(nc, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
-	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub)
+	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
 
 	worker := natsadapter.NewWorker(storeSvc)
 	err := worker.SubscribeAll(nc, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
@@ -267,7 +267,7 @@ func TestStoreService_ReleaseReservation_Success(t *testing.T) {
 	productRepo := mongoadapter.NewProductRepository(db)
 	stockRepo := mongoadapter.NewStockRepository(db)
 	eventPub := natsadapter.NewEventPublisher(nc, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
-	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub)
+	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
 
 	worker := natsadapter.NewWorker(storeSvc)
 	err := worker.SubscribeAll(nc, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
@@ -333,7 +333,7 @@ func TestStoreService_ProductNotFound(t *testing.T) {
 	productRepo := mongoadapter.NewProductRepository(db)
 	stockRepo := mongoadapter.NewStockRepository(db)
 	eventPub := natsadapter.NewEventPublisher(nc, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
-	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub)
+	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
 
 	worker := natsadapter.NewWorker(storeSvc)
 	err := worker.SubscribeAll(nc, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
@@ -379,7 +379,7 @@ func TestStoreService_FullLifecycle(t *testing.T) {
 	productRepo := mongoadapter.NewProductRepository(db)
 	stockRepo := mongoadapter.NewStockRepository(db)
 	eventPub := natsadapter.NewEventPublisher(nc, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
-	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub)
+	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
 
 	worker := natsadapter.NewWorker(storeSvc)
 	err := worker.SubscribeAll(nc, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
@@ -467,7 +467,7 @@ func TestStoreService_ConcurrentReservations(t *testing.T) {
 	productRepo := mongoadapter.NewProductRepository(db)
 	stockRepo := mongoadapter.NewStockRepository(db)
 	eventPub := natsadapter.NewEventPublisher(nc, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
-	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub)
+	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
 
 	worker := natsadapter.NewWorker(storeSvc)
 	err := worker.SubscribeAll(nc, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)

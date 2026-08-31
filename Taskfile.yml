@@ -102,3 +102,11 @@ tasks:
     desc: Остановить demo-стек
     cmds:
       - docker compose --env-file {{.COMPOSE_ENV_FILE}} down -v
+
+  mongo:rs-status:
+    desc: Статус MongoDB replica set
+    cmd: docker compose --env-file {{.COMPOSE_ENV_FILE}} exec mongodb mongosh --quiet --eval "rs.status().members.forEach(m => print(m.name, m.stateStr))"
+
+  sprint6:failover:
+    desc: Сценарии отказоустойчивости БД (Sprint 6)
+    cmd: bash scripts/sprint6-failover.sh

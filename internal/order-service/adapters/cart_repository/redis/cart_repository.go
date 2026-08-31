@@ -17,10 +17,11 @@ const cartKeyPrefix = "cart:"
 
 type CartRepository struct {
 	client *goredis.Client
+	ttl    time.Duration
 }
 
-func NewCartRepository(client *goredis.Client) *CartRepository {
-	return &CartRepository{client: client}
+func NewCartRepository(client *goredis.Client, ttl time.Duration) *CartRepository {
+	return &CartRepository{client: client, ttl: ttl}
 }
 
 type cartDTO struct {
@@ -71,7 +72,7 @@ func (r *CartRepository) Save(ctx context.Context, cart *domain.Cart) error {
 		return fmt.Errorf("marshal cart: %w", err)
 	}
 
-	if err := r.client.Set(ctx, cartKey(cart.UserID()), data, 0).Err(); err != nil {
+	if err := r.client.Set(ctx, cartKey(cart.UserID()), data, r.ttl).Err(); err != nil {
 		return fmt.Errorf("set cart: %w", err)
 	}
 

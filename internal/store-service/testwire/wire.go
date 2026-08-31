@@ -63,7 +63,7 @@ func SetupStore(
 		subjects.OrderConfirmed,
 		subjects.ReservationReleased,
 	)
-	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub)
+	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
 	worker := natsadapter.NewWorker(storeSvc)
 
 	w := &Worker{worker: worker}

@@ -17,6 +17,7 @@ type ServerConfig struct {
 	MetricsPath string
 	TLSConfig   *TLSConfig
 	Auth        *AuthConfig
+	RateLimit   *middleware.RateLimitConfig
 }
 
 type TLSConfig struct {
@@ -77,6 +78,7 @@ func NewServer(
 	httpHandler := middleware.ChainWithAuth(
 		mux, cfg.ServiceName, httpMetrics, nil,
 		secret, makePublicPathSkipper(metricsPath), serviceCAs, serviceCNs, metricsPath,
+		cfg.RateLimit,
 	)
 
 	server := &http.Server{

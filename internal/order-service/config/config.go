@@ -58,6 +58,11 @@ type Config struct {
 	NATSTLSKeyFile  string        `env:"NATS_TLS_KEY_FILE"`
 	NATSTLSCAFile   string        `env:"NATS_TLS_CA_FILE"`
 	MTLSServiceCNs  string        `env:"MTLS_SERVICE_CNS" envDefault:"order-service,payment-service"`
+
+	CartTTL           time.Duration `env:"CART_TTL" envDefault:"24h"`
+	RateLimitEnabled  bool          `env:"RATE_LIMIT_ENABLED" envDefault:"true"`
+	RateLimitRequests int           `env:"RATE_LIMIT_REQUESTS" envDefault:"100"`
+	RateLimitWindow   time.Duration `env:"RATE_LIMIT_WINDOW" envDefault:"1m"`
 }
 
 func Load() (*Config, error) {

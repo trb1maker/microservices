@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,7 +18,10 @@ const (
 	testUserID    = "user-1"
 )
 
-var errTestDB = errors.New("db error")
+var (
+	errTestDB        = errors.New("db error")
+	errTestRedisConn = errors.New("connection refused")
+)
 
 type mockProductRepo struct {
 	products map[string]*domain.Product
@@ -103,7 +107,7 @@ func TestReserveItems_Success(t *testing.T) {
 	products := newMockProductRepo()
 	stocks := newMockStockRepo()
 	events := newMockEventPublisher()
-	svc := NewStoreService(products, stocks, events)
+	svc := NewStoreService(products, stocks, events, nil)
 
 	err := svc.ReserveItems(context.Background(), ReserveItemsRequest{
 		OrderID:   testOrderID,
@@ -125,7 +129,7 @@ func TestReserveItems_Success(t *testing.T) {
 }
 
 func TestReserveItems_InvalidQuantity(t *testing.T) {
-	svc := NewStoreService(newMockProductRepo(), newMockStockRepo(), newMockEventPublisher())
+	svc := NewStoreService(newMockProductRepo(), newMockStockRepo(), newMockEventPublisher(), nil)
 
 	err := svc.ReserveItems(context.Background(), ReserveItemsRequest{
 		OrderID:   testOrderID,
@@ -142,7 +146,7 @@ func TestReserveItems_ProductNotFound(t *testing.T) {
 	products := newMockProductRepo()
 	delete(products.products, testProductID)
 	events := newMockEventPublisher()
-	svc := NewStoreService(products, newMockStockRepo(), events)
+	svc := NewStoreService(products, newMockStockRepo(), events, nil)
 
 	err := svc.ReserveItems(context.Background(), ReserveItemsRequest{
 		OrderID:   testOrderID,
@@ -162,7 +166,7 @@ func TestReserveItems_StockNotFound(t *testing.T) {
 	stocks := newMockStockRepo()
 	delete(stocks.stocks, testProductID)
 	events := newMockEventPublisher()
-	svc := NewStoreService(newMockProductRepo(), stocks, events)
+	svc := NewStoreService(newMockProductRepo(), stocks, events, nil)
 
 	err := svc.ReserveItems(context.Background(), ReserveItemsRequest{
 		OrderID:   testOrderID,
@@ -182,7 +186,7 @@ func TestReserveItems_InsufficientStock(t *testing.T) {
 	stocks := newMockStockRepo()
 	stocks.stocks[testProductID].Available = 1
 	events := newMockEventPublisher()
-	svc := NewStoreService(newMockProductRepo(), stocks, events)
+	svc := NewStoreService(newMockProductRepo(), stocks, events, nil)
 
 	err := svc.ReserveItems(context.Background(), ReserveItemsRequest{
 		OrderID:   testOrderID,
@@ -201,7 +205,7 @@ func TestReserveItems_UpdateError(t *testing.T) {
 	stocks := newMockStockRepo()
 	stocks.updateErr = errTestDB
 	events := newMockEventPublisher()
-	svc := NewStoreService(newMockProductRepo(), stocks, events)
+	svc := NewStoreService(newMockProductRepo(), stocks, events, nil)
 
 	err := svc.ReserveItems(context.Background(), ReserveItemsRequest{
 		OrderID:   testOrderID,
@@ -222,7 +226,7 @@ func TestConfirmOrder_Success(t *testing.T) {
 	stocks.stocks[testProductID].Available = 8
 	stocks.stocks[testProductID].Reserved = 2
 	events := newMockEventPublisher()
-	svc := NewStoreService(newMockProductRepo(), stocks, events)
+	svc := NewStoreService(newMockProductRepo(), stocks, events, nil)
 
 	err := svc.ConfirmOrder(context.Background(), ConfirmOrderRequest{
 		OrderID:   testOrderID,
@@ -247,7 +251,7 @@ func TestConfirmOrder_InsufficientReserved(t *testing.T) {
 	stocks.stocks[testProductID].Available = 8
 	stocks.stocks[testProductID].Reserved = 1
 	events := newMockEventPublisher()
-	svc := NewStoreService(newMockProductRepo(), stocks, events)
+	svc := NewStoreService(newMockProductRepo(), stocks, events, nil)
 
 	err := svc.ConfirmOrder(context.Background(), ConfirmOrderRequest{
 		OrderID:   testOrderID,
@@ -268,7 +272,7 @@ func TestReleaseReservation_Success(t *testing.T) {
 	stocks.stocks[testProductID].Available = 8
 	stocks.stocks[testProductID].Reserved = 2
 	events := newMockEventPublisher()
-	svc := NewStoreService(newMockProductRepo(), stocks, events)
+	svc := NewStoreService(newMockProductRepo(), stocks, events, nil)
 
 	err := svc.ReleaseReservation(context.Background(), ReleaseReservationRequest{
 		OrderID:   testOrderID,
@@ -289,11 +293,93 @@ func TestReleaseReservation_Success(t *testing.T) {
 	assert.Equal(t, 2, events.reservationReleased[0].Quantity)
 }
 
+type failingLocker struct{}
+
+func (failingLocker) WithLock(context.Context, string, func(context.Context) error) error {
+	return errLockNotAcquired
+}
+
+type redisErrorLocker struct{}
+
+func (redisErrorLocker) WithLock(context.Context, string, func(context.Context) error) error {
+	return fmt.Errorf("acquire lock: %w", errTestRedisConn)
+}
+
+func TestReserveItems_LockNotAcquired(t *testing.T) {
+	events := newMockEventPublisher()
+	svc := NewStoreService(newMockProductRepo(), newMockStockRepo(), events, failingLocker{})
+
+	err := svc.ReserveItems(context.Background(), ReserveItemsRequest{
+		OrderID:   testOrderID,
+		UserID:    testUserID,
+		ProductID: testProductID,
+		Quantity:  1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, events.reservationFailed, 1)
+	assert.Equal(t, "lock not acquired", events.reservationFailed[0].Reason)
+}
+
+func TestReserveItems_LockUnavailable(t *testing.T) {
+	events := newMockEventPublisher()
+	svc := NewStoreService(newMockProductRepo(), newMockStockRepo(), events, redisErrorLocker{})
+
+	err := svc.ReserveItems(context.Background(), ReserveItemsRequest{
+		OrderID:   testOrderID,
+		UserID:    testUserID,
+		ProductID: testProductID,
+		Quantity:  1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, events.reservationFailed, 1)
+	assert.Equal(t, "lock unavailable", events.reservationFailed[0].Reason)
+}
+
+func TestConfirmOrder_LockNotAcquired(t *testing.T) {
+	stocks := newMockStockRepo()
+	stocks.stocks[testProductID].Available = 8
+	stocks.stocks[testProductID].Reserved = 2
+	events := newMockEventPublisher()
+	svc := NewStoreService(newMockProductRepo(), stocks, events, failingLocker{})
+
+	err := svc.ConfirmOrder(context.Background(), ConfirmOrderRequest{
+		OrderID:   testOrderID,
+		UserID:    testUserID,
+		ProductID: testProductID,
+		Quantity:  2,
+	})
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, errLockNotAcquired)
+	require.Empty(t, events.orderConfirmed)
+}
+
+func TestReleaseReservation_LockNotAcquired(t *testing.T) {
+	stocks := newMockStockRepo()
+	stocks.stocks[testProductID].Available = 8
+	stocks.stocks[testProductID].Reserved = 2
+	events := newMockEventPublisher()
+	svc := NewStoreService(newMockProductRepo(), stocks, events, failingLocker{})
+
+	err := svc.ReleaseReservation(context.Background(), ReleaseReservationRequest{
+		OrderID:   testOrderID,
+		UserID:    testUserID,
+		ProductID: testProductID,
+		Quantity:  2,
+	})
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, errLockNotAcquired)
+	require.Empty(t, events.reservationReleased)
+}
+
 func TestReleaseReservation_InsufficientReserved(t *testing.T) {
 	stocks := newMockStockRepo()
 	stocks.stocks[testProductID].Available = 8
 	stocks.stocks[testProductID].Reserved = 1
-	svc := NewStoreService(newMockProductRepo(), stocks, nil)
+	svc := NewStoreService(newMockProductRepo(), stocks, nil, nil)
 
 	err := svc.ReleaseReservation(context.Background(), ReleaseReservationRequest{
 		OrderID:   testOrderID,
