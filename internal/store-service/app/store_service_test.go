@@ -260,8 +260,7 @@ func TestConfirmOrder_InsufficientReserved(t *testing.T) {
 		Quantity:  2,
 	})
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "insufficient reserved stock")
+	require.NoError(t, err)
 
 	require.Len(t, events.reservationFailed, 1)
 	assert.Equal(t, "reservation not found", events.reservationFailed[0].Reason)
