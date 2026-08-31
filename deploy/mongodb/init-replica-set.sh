@@ -1,9 +1,25 @@
 #!/bin/sh
 set -eu
 
-echo "Waiting for MongoDB nodes..."
-sleep 5
+wait_host() {
+  host="$1"
+  i=0
+  echo "Waiting for ${host}..."
+  until mongosh --host "${host}:27017" --quiet --eval "db.runCommand({ping:1}).ok" | grep -q 1; do
+    i=$((i + 1))
+    if [ "$i" -gt 60 ]; then
+      echo "timeout waiting for ${host}"
+      exit 1
+    fi
+    sleep 1
+  done
+}
 
+wait_host mongodb
+wait_host mongodb-2
+wait_host mongodb-3
+
+echo "Initializing replica set..."
 mongosh --host mongodb:27017 --quiet --eval "
 try {
   rs.status();
