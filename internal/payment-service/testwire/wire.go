@@ -83,7 +83,7 @@ func StartInsecureGRPC(ctx context.Context, pool *pgxpool.Pool, client *natsx.Cl
 		subjects.RefundFailed,
 	)
 	svc := app.NewPaymentService(accountRepo, txRepo, eventPub)
-	relayCtx, relayCancel := context.WithCancel(ctx)
+	relayCtx, relayCancel := context.WithCancel(context.WithoutCancel(ctx))
 	relay := outbox.NewRelay(outboxpg.New(pool), outboxnats.New(client), outbox.RelayConfig{
 		PollInterval: testOutboxPollInterval,
 		BatchSize:    testOutboxBatchSize,

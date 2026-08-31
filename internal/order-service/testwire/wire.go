@@ -174,7 +174,7 @@ func startOutboxRelay(ctx context.Context, pool *pgxpool.Pool, client *natsx.Cli
 		PollInterval: testOutboxPollInterval,
 		BatchSize:    testOutboxBatchSize,
 	})
-	relayCtx, relayCancel := context.WithCancel(ctx)
+	relayCtx, relayCancel := context.WithCancel(context.WithoutCancel(ctx))
 	go func() { _ = relay.Run(relayCtx) }()
 	return relayCancel
 }
