@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcnats "github.com/testcontainers/testcontainers-go/modules/nats"
 	natsadapter "github.com/trb1maker/microservices/internal/notification-service/adapters/nats"
 	"github.com/trb1maker/microservices/internal/notification-service/app"
+	"github.com/trb1maker/microservices/tests/internal/natstest"
 )
 
 const (
@@ -43,15 +43,14 @@ func TestIntegration_AllNotificationSubjects(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	container, err := tcnats.Run(ctx, "nats:2.14-alpine")
+	container, err := tcnats.Run(ctx, natstest.Image, natstest.ContainerOptions()...)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
 
 	url, err := container.ConnectionString(ctx)
 	require.NoError(t, err)
 
-	nc, err := nats.Connect(url)
-	require.NoError(t, err)
+	nc := natstest.Connect(t, url)
 	t.Cleanup(nc.Close)
 
 	sink := &recordingSink{ch: make(chan appCall, 5)}

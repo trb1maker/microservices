@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -27,6 +26,7 @@ import (
 	summarypostgres "github.com/trb1maker/microservices/internal/analytics-service/adapters/summary_repository/postgres"
 	"github.com/trb1maker/microservices/internal/analytics-service/app"
 	"github.com/trb1maker/microservices/internal/analytics-service/migrations"
+	"github.com/trb1maker/microservices/tests/internal/natstest"
 )
 
 const orderFinalizedSubject = "orders.finalized"
@@ -72,7 +72,7 @@ func TestIntegration_OrderFinalizedFlow(t *testing.T) {
 	require.NoError(t, migrations.Up(db))
 	require.NoError(t, db.Close())
 
-	natsContainer, err := tcnats.Run(ctx, "nats:2.14-alpine")
+	natsContainer, err := tcnats.Run(ctx, natstest.Image, natstest.ContainerOptions()...)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = natsContainer.Terminate(context.Background()) })
 
@@ -93,8 +93,7 @@ func TestIntegration_OrderFinalizedFlow(t *testing.T) {
 	summaryRepo := summarypostgres.NewSummaryRepository(pool)
 	analyticsSvc := app.NewAnalyticsService(receiptStorage, summaryRepo)
 
-	nc, err := nats.Connect(natsURL)
-	require.NoError(t, err)
+	nc := natstest.Connect(t, natsURL)
 	t.Cleanup(nc.Close)
 
 	analyticsConsumer := natsconsumer.NewConsumer(nc, orderFinalizedSubject, analyticsSvc)
