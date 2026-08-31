@@ -13,12 +13,15 @@ import (
 
 	cartmemory "github.com/trb1maker/microservices/internal/order-service/adapters/cart_repository/memory"
 	cartredis "github.com/trb1maker/microservices/internal/order-service/adapters/cart_repository/redis"
+	checkoutpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/checkout_writer/postgres"
 	natsconsumer "github.com/trb1maker/microservices/internal/order-service/adapters/event_consumer/nats"
 	natsadapter "github.com/trb1maker/microservices/internal/order-service/adapters/event_publisher/nats"
 	grpcadapter "github.com/trb1maker/microservices/internal/order-service/adapters/grpc"
 	httpadapter "github.com/trb1maker/microservices/internal/order-service/adapters/http"
 	ordermemory "github.com/trb1maker/microservices/internal/order-service/adapters/order_repository/memory"
 	orderpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/order_repository/postgres"
+	outboxrelay "github.com/trb1maker/microservices/internal/order-service/adapters/outbox_relay"
+	outboxpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/outbox_repository/postgres"
 	paymentgrpc "github.com/trb1maker/microservices/internal/order-service/adapters/payment/grpc"
 	userpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/user_repository/postgres"
 	"github.com/trb1maker/microservices/internal/order-service/app"
@@ -29,6 +32,7 @@ import (
 	"github.com/trb1maker/microservices/internal/platform/logging"
 	"github.com/trb1maker/microservices/internal/platform/metrics"
 	pkgmiddleware "github.com/trb1maker/microservices/internal/platform/middleware"
+	"github.com/trb1maker/microservices/internal/platform/natsx"
 	pkgotel "github.com/trb1maker/microservices/internal/platform/otel"
 	"github.com/trb1maker/microservices/internal/platform/tlsutil"
 
@@ -162,6 +166,7 @@ type dependencies struct {
 	natsConsumer  *natsconsumer.Consumer
 	paymentClient *paymentgrpc.PaymentClient
 	redisClient   *goredis.Client
+	relayCancel   context.CancelFunc
 }
 
 func newHTTPServer(cfg *config.Config, deps *dependencies, appMetrics *metrics.Metrics, redisClient *goredis.Client) (*http.Server, error) {
@@ -277,11 +282,19 @@ func buildDependencies(
 		return nil, nil, err
 	}
 
+	natsClient, err := natsx.New(ctx, natsConn)
+	if err != nil {
+		natsConn.Close()
+		closePostgres(db, pool)
+		_ = redisClient.Close()
+		return nil, nil, fmt.Errorf("init jetstream: %w", err)
+	}
+
 	orderRepo := orderpostgres.NewOrderRepository(pool)
 	cartRepo := cartredis.NewCartRepository(redisClient, cfg.CartTTL)
 	userRepo := userpostgres.NewUserRepository(pool)
 	authService := app.NewAuthService(userRepo, cfg.JWTSecret, cfg.JWTTTL)
-	events := natsadapter.NewPublisher(natsConn, natsadapter.Subjects{
+	events := natsadapter.NewPublisher(natsClient, natsadapter.Subjects{
 		OrderCreated:       cfg.OrderCreatedSubject,
 		ReserveItems:       cfg.ReserveItemsSubject,
 		ConfirmOrder:       cfg.ConfirmOrderSubject,
@@ -307,14 +320,37 @@ func buildDependencies(
 	}
 
 	cartService := app.NewCartService(cartRepo, events)
-	orderService := app.NewOrderService(cartRepo, orderRepo, events, paymentClient, statusHub, app.NewNoopOrderMetrics())
+	checkoutWriter := checkoutpostgres.NewWriter(pool)
+	orderService := app.NewOrderService(
+		cartRepo,
+		orderRepo,
+		events,
+		paymentClient,
+		statusHub,
+		app.NewNoopOrderMetrics(),
+		checkoutWriter,
+		app.OrderCreatedSubject(cfg.OrderCreatedSubject),
+	)
 
-	consumer := natsconsumer.NewConsumer(natsConn, natsconsumer.Subjects{
+	outboxRepo := outboxpostgres.NewRepository(pool)
+	relay := outboxrelay.New(outboxRepo, natsClient, outboxrelay.Config{
+		PollInterval: cfg.OutboxPollInterval,
+		BatchSize:    cfg.OutboxBatchSize,
+	})
+	relayCtx, relayCancel := context.WithCancel(ctx)
+	go func() {
+		if err := relay.Run(relayCtx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("outbox relay stopped", slog.Any("error", err))
+		}
+	}()
+
+	consumer := natsconsumer.NewConsumer(natsClient, natsconsumer.Subjects{
 		ItemsReserved:     cfg.ItemsReservedSubject,
 		ReservationFailed: cfg.ReservationFailedSubject,
 		OrderConfirmed:    cfg.OrderConfirmedSubject,
 	}, cartService, orderService)
-	if err := consumer.Start(); err != nil {
+	if err := consumer.Start(ctx); err != nil {
+		relayCancel()
 		_ = paymentClient.Close()
 		natsConn.Close()
 		closePostgres(db, pool)
@@ -334,6 +370,7 @@ func buildDependencies(
 	}
 
 	cleanup := func() {
+		relayCancel()
 		consumer.Close()
 		_ = paymentClient.Close()
 		natsConn.Close()
@@ -353,6 +390,7 @@ func buildDependencies(
 		natsConsumer:  consumer,
 		paymentClient: paymentClient,
 		redisClient:   redisClient,
+		relayCancel:   relayCancel,
 	}, cleanup, nil
 }
 

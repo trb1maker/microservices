@@ -12,12 +12,14 @@ import (
 )
 
 type OrderService struct {
-	carts    CartRepository
-	orders   OrderRepository
-	events   EventPublisher
-	payments PaymentClient
-	notifier StatusNotifier
-	metrics  OrderMetrics
+	carts               CartRepository
+	orders              OrderRepository
+	checkoutWriter      CheckoutWriter
+	orderCreatedSubject string
+	events              EventPublisher
+	payments            PaymentClient
+	notifier            StatusNotifier
+	metrics             OrderMetrics
 }
 
 func NewOrderService(
@@ -27,9 +29,11 @@ func NewOrderService(
 	extras ...any,
 ) *OrderService {
 	var (
-		payments PaymentClient  = NewNoopPaymentClient()
-		notifier StatusNotifier = NoopStatusNotifier{}
-		metrics  OrderMetrics   = NewNoopOrderMetrics()
+		payments            PaymentClient  = NewNoopPaymentClient()
+		notifier            StatusNotifier = NoopStatusNotifier{}
+		metrics             OrderMetrics   = NewNoopOrderMetrics()
+		checkoutWriter      CheckoutWriter
+		orderCreatedSubject string
 	)
 	for _, extra := range extras {
 		switch value := extra.(type) {
@@ -45,15 +49,26 @@ func NewOrderService(
 			if value != nil {
 				metrics = value
 			}
+		case CheckoutWriter:
+			if value != nil {
+				checkoutWriter = value
+			}
+		case OrderCreatedSubject:
+			orderCreatedSubject = string(value)
 		}
 	}
+	if checkoutWriter == nil {
+		checkoutWriter = NewImmediateCheckoutWriter(orders, events)
+	}
 	return &OrderService{
-		carts:    carts,
-		orders:   orders,
-		events:   events,
-		payments: payments,
-		notifier: notifier,
-		metrics:  metrics,
+		carts:               carts,
+		orders:              orders,
+		checkoutWriter:      checkoutWriter,
+		orderCreatedSubject: orderCreatedSubject,
+		events:              events,
+		payments:            payments,
+		notifier:            notifier,
+		metrics:             metrics,
 	}
 }
 
@@ -80,20 +95,17 @@ func (s *OrderService) Checkout(
 		return nil, fmt.Errorf("checkout cart: %w", err)
 	}
 
-	if err := s.orders.Save(ctx, order); err != nil {
-		return nil, fmt.Errorf("save order: %w", err)
+	if err := s.checkoutWriter.PersistCheckout(ctx, order, OrderCreated{
+		OrderID:    uuid.UUID(order.OrderID()).String(),
+		UserID:     uuid.UUID(order.UserID()).String(),
+		TotalPrice: order.TotalPrice(),
+	}, s.orderCreatedSubject); err != nil {
+		return nil, fmt.Errorf("persist checkout: %w", err)
 	}
 
 	cart.Clear()
 	if err := s.carts.Save(ctx, cart); err != nil {
 		return nil, fmt.Errorf("save cart: %w", err)
-	}
-
-	if err := s.publishOrderCreated(ctx, order); err != nil {
-		if rollbackErr := s.rollbackCheckout(ctx, userID, order); rollbackErr != nil {
-			return nil, fmt.Errorf("publish order created: %w (rollback failed: %w)", err, rollbackErr)
-		}
-		return nil, fmt.Errorf("publish order created: %w", err)
 	}
 
 	s.metrics.RecordOrderCreated()
@@ -166,7 +178,7 @@ func (s *OrderService) HandleOrderConfirmed(ctx context.Context, event OrderConf
 		return nil
 	}
 	if order.Status() == domain.OrderStatusConfirmed {
-		return nil
+		return s.publishOrderFinalized(ctx, order, now)
 	}
 	if order.Status() != domain.OrderStatusPaid {
 		return nil
@@ -179,17 +191,25 @@ func (s *OrderService) HandleOrderConfirmed(ctx context.Context, event OrderConf
 		return fmt.Errorf("save order: %w", err)
 	}
 
-	if err := s.events.PublishOrderFinalized(ctx, OrderFinalized{
-		OrderID:     uuid.UUID(order.OrderID()).String(),
-		UserID:      uuid.UUID(order.UserID()).String(),
-		TotalAmount: order.TotalPrice(),
-		Status:      string(order.Status()),
-		FinalizedAt: now.UTC().Format(time.RFC3339),
-	}); err != nil {
-		return fmt.Errorf("publish order finalized: %w", err)
+	if err := s.publishOrderFinalized(ctx, order, now); err != nil {
+		return err
 	}
 
 	s.notifyAndRefresh(ctx, order)
+	return nil
+}
+
+func (s *OrderService) publishOrderFinalized(ctx context.Context, order *domain.Order, now time.Time) error {
+	if err := s.events.PublishOrderFinalized(ctx, OrderFinalized{
+		OrderID:         uuid.UUID(order.OrderID()).String(),
+		UserID:          uuid.UUID(order.UserID()).String(),
+		TotalAmount:     order.TotalPrice(),
+		Status:          string(order.Status()),
+		FinalizedAt:     now.UTC().Format(time.RFC3339),
+		DeliveryAddress: order.DeliveryAddress(),
+	}); err != nil {
+		return fmt.Errorf("publish order finalized: %w", err)
+	}
 	return nil
 }
 
@@ -321,32 +341,6 @@ func (s *OrderService) CancelOrder(
 
 	s.notifyAndRefresh(ctx, order)
 	return order, nil
-}
-
-func (s *OrderService) rollbackCheckout(ctx context.Context, userID domain.UserID, order *domain.Order) error {
-	if err := s.orders.Delete(ctx, order.OrderID()); err != nil {
-		return fmt.Errorf("delete order: %w", err)
-	}
-	restoredCart, err := domain.ReconstituteCart(userID, order.OrderID(), time.Now(), order.Items()...)
-	if err != nil {
-		return fmt.Errorf("reconstitute cart: %w", err)
-	}
-	if err := s.carts.Save(ctx, restoredCart); err != nil {
-		return fmt.Errorf("restore cart: %w", err)
-	}
-	s.refreshActiveOrders(ctx)
-	return nil
-}
-
-func (s *OrderService) publishOrderCreated(ctx context.Context, order *domain.Order) error {
-	if err := s.events.PublishOrderCreated(ctx, OrderCreated{
-		OrderID:    uuid.UUID(order.OrderID()).String(),
-		UserID:     uuid.UUID(order.UserID()).String(),
-		TotalPrice: order.TotalPrice(),
-	}); err != nil {
-		return fmt.Errorf("publish order created event: %w", err)
-	}
-	return nil
 }
 
 func (s *OrderService) publishOrderCancelled(ctx context.Context, order *domain.Order) error {
