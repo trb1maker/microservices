@@ -62,10 +62,20 @@
 **Обоснование:** Единообразие логов и проб без дублирования и без `go.work` / отдельных модулей; gopls и CI работают из корня репозитория.  
 **Не входит в platform:** бизнес-сущности, use cases, миграции БД, env-структуры сервисов.
 
-### ADR 9. Transactional Outbox на checkout
-**Контекст:** Публикация `orders.created` после commit заказа не атомарна.  
-**Решение:** Таблица `outbox` в Order Service; checkout + outbox в одной TX; relay публикует в JetStream с `FOR UPDATE SKIP LOCKED`.  
-**Обоснование:** At-least-once доставка без 2PC; finalized/confirm остаются прямой JS-публикацией с idempotent republish finalized при redelivery.
+### ADR 9. Transactional Outbox в Order Service
+**Контекст:** Публикация saga-событий после commit заказа не атомарна.  
+**Решение:** Таблица `outbox` в Order Service; checkout, confirm, finalize и cancel пишут строки outbox в одной TX с изменением заказа; relay публикует в JetStream с `FOR UPDATE SKIP LOCKED` и exponential backoff.  
+**Обоснование:** At-least-once доставка без 2PC; inbox на stateful-консьюмерах dedup по `Nats-Msg-Id`.
+
+### ADR 10. Отказоустойчивость gRPC Payment
+**Контекст:** Order Service вызывает Payment синхронно; при падении Payment HTTP `/pay` мог зависать на lazy gRPC dial.  
+**Решение:** Per-RPC timeout (`PAYMENT_RPC_TIMEOUT`, default 2s), circuit breaker (`internal/platform/breaker` + `sony/gobreaker/v2`) на Charge/Refund; транспортные ошибки и open breaker → HTTP 503, бизнес-отказ (insufficient funds) → HTTP 402.  
+**Обоснование:** Быстрый fail-fast без блокировки HTTP-воркеров; breaker не триппится на бизнес-ошибках Payment.
+
+### ADR 11. CQRS через PostgreSQL replica
+**Контекст:** В compose есть `postgres-replica` (hot standby), приложения пишут только в primary.  
+**Решение:** Для Sprint 8 CQRS = документированная read-модель на streaming replica; отдельный read-сервис и `DATABASE_READ_URL` не вводим.  
+**Обоснование:** Достаточно для учебного ДЗ и failover-демо; чтение с replica — следующий шаг при росте нагрузки на list/get orders.
 
 ---
 

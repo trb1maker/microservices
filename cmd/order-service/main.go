@@ -314,6 +314,7 @@ func buildDependencies(
 		KeyFile:    cfg.NATSTLSKeyFile,
 		CAFile:     cfg.NATSTLSCAFile,
 		ServerName: "payment-service",
+		RPCTimeout: cfg.PaymentRPCTimeout,
 	})
 	if err != nil {
 		natsConn.Close()
@@ -333,6 +334,11 @@ func buildDependencies(
 		app.NewNoopOrderMetrics(),
 		checkoutWriter,
 		app.OrderCreatedSubject(cfg.OrderCreatedSubject),
+		app.OrderEventSubjects{
+			ConfirmOrder:   cfg.ConfirmOrderSubject,
+			OrderFinalized: cfg.OrderFinalizedSubject,
+			OrderCancelled: cfg.OrderCancelledSubject,
+		},
 	)
 
 	relay := outbox.NewRelay(outboxpg.New(pool), outboxnats.New(natsClient), outbox.RelayConfig{

@@ -10,4 +10,5 @@ var (
 	ErrInvalidOrderID          = errors.New("invalid order id")
 	ErrOrderNotPayable         = errors.New("order is not payable")
 	ErrPaymentFailed           = errors.New("payment failed")
+	ErrPaymentUnavailable      = errors.New("payment service unavailable")
 )

@@ -12,14 +12,17 @@ import (
 )
 
 type OrderService struct {
-	carts               CartRepository
-	orders              OrderRepository
-	checkoutWriter      CheckoutWriter
-	orderCreatedSubject string
-	events              EventPublisher
-	payments            PaymentClient
-	notifier            StatusNotifier
-	metrics             OrderMetrics
+	carts                 CartRepository
+	orders                OrderRepository
+	checkoutWriter        CheckoutWriter
+	orderCreatedSubject   string
+	confirmOrderSubject   string
+	orderFinalizedSubject string
+	orderCancelledSubject string
+	events                EventPublisher
+	payments              PaymentClient
+	notifier              StatusNotifier
+	metrics               OrderMetrics
 }
 
 func NewOrderService(
@@ -29,11 +32,14 @@ func NewOrderService(
 	extras ...any,
 ) *OrderService {
 	var (
-		payments            PaymentClient  = NewNoopPaymentClient()
-		notifier            StatusNotifier = NoopStatusNotifier{}
-		metrics             OrderMetrics   = NewNoopOrderMetrics()
-		checkoutWriter      CheckoutWriter
-		orderCreatedSubject string
+		payments              PaymentClient  = NewNoopPaymentClient()
+		notifier              StatusNotifier = NoopStatusNotifier{}
+		metrics               OrderMetrics   = NewNoopOrderMetrics()
+		checkoutWriter        CheckoutWriter
+		orderCreatedSubject   string
+		confirmOrderSubject   string
+		orderFinalizedSubject string
+		orderCancelledSubject string
 	)
 	for _, extra := range extras {
 		switch value := extra.(type) {
@@ -55,20 +61,27 @@ func NewOrderService(
 			}
 		case OrderCreatedSubject:
 			orderCreatedSubject = string(value)
+		case OrderEventSubjects:
+			confirmOrderSubject = value.ConfirmOrder
+			orderFinalizedSubject = value.OrderFinalized
+			orderCancelledSubject = value.OrderCancelled
 		}
 	}
 	if checkoutWriter == nil {
 		checkoutWriter = NewImmediateCheckoutWriter(orders, events)
 	}
 	return &OrderService{
-		carts:               carts,
-		orders:              orders,
-		checkoutWriter:      checkoutWriter,
-		orderCreatedSubject: orderCreatedSubject,
-		events:              events,
-		payments:            payments,
-		notifier:            notifier,
-		metrics:             metrics,
+		carts:                 carts,
+		orders:                orders,
+		checkoutWriter:        checkoutWriter,
+		orderCreatedSubject:   orderCreatedSubject,
+		confirmOrderSubject:   confirmOrderSubject,
+		orderFinalizedSubject: orderFinalizedSubject,
+		orderCancelledSubject: orderCancelledSubject,
+		events:                events,
+		payments:              payments,
+		notifier:              notifier,
+		metrics:               metrics,
 	}
 }
 
@@ -145,19 +158,22 @@ func (s *OrderService) PayOrder(ctx context.Context, userID domain.UserID, order
 	if err := order.MarkPaid(domain.PaymentID(paymentID), now); err != nil {
 		return nil, fmt.Errorf("mark paid: %w", err)
 	}
-	if err := s.orders.Save(ctx, order); err != nil {
-		return nil, fmt.Errorf("save order: %w", err)
-	}
 
+	messages := make([]OutboxEnqueue, 0, len(order.Items()))
 	for _, item := range order.Items() {
-		if err := s.events.PublishConfirmOrder(ctx, ConfirmOrder{
-			OrderID:   uuid.UUID(order.OrderID()).String(),
-			UserID:    uuid.UUID(order.UserID()).String(),
-			ProductID: uuid.UUID(item.ProductID()).String(),
-			Quantity:  int(item.Quantity()),
-		}); err != nil {
-			return nil, fmt.Errorf("publish confirm order: %w", err)
-		}
+		messages = append(messages, OutboxEnqueue{
+			EventType: OutboxEventConfirmOrder,
+			Subject:   s.confirmOrderSubject,
+			Event: ConfirmOrder{
+				OrderID:   uuid.UUID(order.OrderID()).String(),
+				UserID:    uuid.UUID(order.UserID()).String(),
+				ProductID: uuid.UUID(item.ProductID()).String(),
+				Quantity:  int(item.Quantity()),
+			},
+		})
+	}
+	if err := s.checkoutWriter.PersistWithOutbox(ctx, order, messages); err != nil {
+		return nil, fmt.Errorf("persist paid order: %w", err)
 	}
 
 	s.notifyAndRefresh(ctx, order)
@@ -178,7 +194,7 @@ func (s *OrderService) HandleOrderConfirmed(ctx context.Context, event OrderConf
 		return nil
 	}
 	if order.Status() == domain.OrderStatusConfirmed {
-		return s.publishOrderFinalized(ctx, order, now)
+		return s.enqueueOrderFinalized(ctx, order, now)
 	}
 	if order.Status() != domain.OrderStatusPaid {
 		return nil
@@ -187,30 +203,43 @@ func (s *OrderService) HandleOrderConfirmed(ctx context.Context, event OrderConf
 	if err := order.MarkConfirmed(now); err != nil {
 		return fmt.Errorf("mark confirmed: %w", err)
 	}
-	if err := s.orders.Save(ctx, order); err != nil {
-		return fmt.Errorf("save order: %w", err)
-	}
 
-	if err := s.publishOrderFinalized(ctx, order, now); err != nil {
-		return err
+	if err := s.checkoutWriter.PersistWithOutbox(ctx, order, []OutboxEnqueue{
+		{
+			EventType: OutboxEventOrderFinalized,
+			Subject:   s.orderFinalizedSubject,
+			Event:     s.orderFinalizedEvent(order, now),
+		},
+	}); err != nil {
+		return fmt.Errorf("persist confirmed order: %w", err)
 	}
 
 	s.notifyAndRefresh(ctx, order)
 	return nil
 }
 
-func (s *OrderService) publishOrderFinalized(ctx context.Context, order *domain.Order, now time.Time) error {
-	if err := s.events.PublishOrderFinalized(ctx, OrderFinalized{
+func (s *OrderService) enqueueOrderFinalized(ctx context.Context, order *domain.Order, now time.Time) error {
+	if err := s.checkoutWriter.EnqueueOutbox(ctx, uuid.UUID(order.OrderID()), []OutboxEnqueue{
+		{
+			EventType: OutboxEventOrderFinalized,
+			Subject:   s.orderFinalizedSubject,
+			Event:     s.orderFinalizedEvent(order, now),
+		},
+	}); err != nil {
+		return fmt.Errorf("enqueue order finalized: %w", err)
+	}
+	return nil
+}
+
+func (s *OrderService) orderFinalizedEvent(order *domain.Order, now time.Time) OrderFinalized {
+	return OrderFinalized{
 		OrderID:         uuid.UUID(order.OrderID()).String(),
 		UserID:          uuid.UUID(order.UserID()).String(),
 		TotalAmount:     order.TotalPrice(),
 		Status:          string(order.Status()),
 		FinalizedAt:     now.UTC().Format(time.RFC3339),
 		DeliveryAddress: order.DeliveryAddress(),
-	}); err != nil {
-		return fmt.Errorf("publish order finalized: %w", err)
 	}
-	return nil
 }
 
 func (s *OrderService) HandleReservationFailed(ctx context.Context, event ReservationFailed, now time.Time) error {
@@ -242,11 +271,17 @@ func (s *OrderService) HandleReservationFailed(ctx context.Context, event Reserv
 	if err := order.Cancel(now); err != nil {
 		return fmt.Errorf("cancel order: %w", err)
 	}
-	if err := s.orders.Save(ctx, order); err != nil {
-		return fmt.Errorf("save order: %w", err)
-	}
-	if err := s.publishOrderCancelled(ctx, order); err != nil {
-		return fmt.Errorf("publish order cancelled: %w", err)
+	if err := s.checkoutWriter.PersistWithOutbox(ctx, order, []OutboxEnqueue{
+		{
+			EventType: OutboxEventOrderCancelled,
+			Subject:   s.orderCancelledSubject,
+			Event: OrderCancelled{
+				OrderID: uuid.UUID(order.OrderID()).String(),
+				UserID:  uuid.UUID(order.UserID()).String(),
+			},
+		},
+	}); err != nil {
+		return fmt.Errorf("persist cancelled order: %w", err)
 	}
 	s.notifyAndRefresh(ctx, order)
 	return nil
@@ -318,12 +353,17 @@ func (s *OrderService) CancelOrder(
 	if err := order.Cancel(now); err != nil {
 		return nil, fmt.Errorf("cancel order: %w", err)
 	}
-	if err := s.orders.Save(ctx, order); err != nil {
-		return nil, fmt.Errorf("save order: %w", err)
-	}
-
-	if err := s.publishOrderCancelled(ctx, order); err != nil {
-		return nil, fmt.Errorf("publish order cancelled: %w", err)
+	if err := s.checkoutWriter.PersistWithOutbox(ctx, order, []OutboxEnqueue{
+		{
+			EventType: OutboxEventOrderCancelled,
+			Subject:   s.orderCancelledSubject,
+			Event: OrderCancelled{
+				OrderID: uuid.UUID(order.OrderID()).String(),
+				UserID:  uuid.UUID(order.UserID()).String(),
+			},
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("persist cancelled order: %w", err)
 	}
 
 	if releaseReservation {
@@ -341,16 +381,6 @@ func (s *OrderService) CancelOrder(
 
 	s.notifyAndRefresh(ctx, order)
 	return order, nil
-}
-
-func (s *OrderService) publishOrderCancelled(ctx context.Context, order *domain.Order) error {
-	if err := s.events.PublishOrderCancelled(ctx, OrderCancelled{
-		OrderID: uuid.UUID(order.OrderID()).String(),
-		UserID:  uuid.UUID(order.UserID()).String(),
-	}); err != nil {
-		return fmt.Errorf("publish order cancelled event: %w", err)
-	}
-	return nil
 }
 
 func (s *OrderService) notifyAndRefresh(ctx context.Context, order *domain.Order) {
