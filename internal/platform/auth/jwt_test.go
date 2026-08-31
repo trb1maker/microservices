@@ -3,10 +3,10 @@ package auth_test
 import (
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/trb1maker/microservices/internal/platform/auth"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,7 +16,7 @@ const testJWTSecret = "test-secret-minimum-32-characters"
 func TestIssueAndValidateToken(t *testing.T) {
 	t.Parallel()
 
-	userID := uuid.New()
+	userID := uuid.NewV7()
 
 	token, err := auth.IssueToken(testJWTSecret, userID, time.Hour)
 	require.NoError(t, err)
@@ -29,7 +29,7 @@ func TestIssueAndValidateToken(t *testing.T) {
 func TestValidateToken_wrongSecret(t *testing.T) {
 	t.Parallel()
 
-	userID := uuid.New()
+	userID := uuid.NewV7()
 
 	token, err := auth.IssueToken(testJWTSecret, userID, time.Hour)
 	require.NoError(t, err)
@@ -41,7 +41,7 @@ func TestValidateToken_wrongSecret(t *testing.T) {
 func TestValidateToken_expired(t *testing.T) {
 	t.Parallel()
 
-	userID := uuid.New()
+	userID := uuid.NewV7()
 
 	token, err := auth.IssueToken(testJWTSecret, userID, -time.Minute)
 	require.NoError(t, err)

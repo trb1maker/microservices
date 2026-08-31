@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	goredis "github.com/redis/go-redis/v9"

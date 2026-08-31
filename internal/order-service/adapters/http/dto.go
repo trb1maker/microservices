@@ -54,13 +54,11 @@ func mapError(err error) (int, string) {
 	case errors.Is(err, app.ErrPaymentFailed):
 		return http.StatusPaymentRequired, err.Error()
 	default:
-		var syntaxErr *json.SyntaxError
-		if errors.As(err, &syntaxErr) {
+		if _, ok := errors.AsType[*json.SyntaxError](err); ok {
 			return http.StatusBadRequest, msgInvalidRequestBody
 		}
 
-		var typeErr *json.UnmarshalTypeError
-		if errors.As(err, &typeErr) {
+		if _, ok := errors.AsType[*json.UnmarshalTypeError](err); ok {
 			return http.StatusBadRequest, msgInvalidRequestBody
 		}
 

@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/trb1maker/microservices/internal/platform/auth"
 	"github.com/trb1maker/microservices/internal/platform/middleware"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +34,7 @@ func TestJWTAuth_requiresToken(t *testing.T) {
 func TestJWTAuth_validToken(t *testing.T) {
 	t.Parallel()
 
-	userID := uuid.New()
+	userID := uuid.NewV7()
 
 	token, err := auth.IssueToken(testJWTSecret, userID, time.Hour)
 	require.NoError(t, err)

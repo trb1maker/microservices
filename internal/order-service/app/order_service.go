@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 )
 

@@ -6,10 +6,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"uuid"
 
 	"github.com/trb1maker/microservices/internal/platform/auth"
-
-	"github.com/google/uuid"
 )
 
 const bearerPartsCount = 2

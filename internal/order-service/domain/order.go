@@ -4,8 +4,7 @@ import (
 	"errors"
 	"slices"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 )
 
 var (

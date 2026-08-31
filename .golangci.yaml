@@ -70,7 +70,6 @@ linters:
             - "!**/*_test.go"
           allow:
             - $gostd
-            - github.com/google/uuid
         application:
           files:
             - "internal/*/app/**/*.go"
@@ -168,5 +167,5 @@ formatters:
 run:
   timeout: 5m
   allow-parallel-runners: true
-  go: "1.26.4"
+  go: "1.27.0"
   concurrency: 4

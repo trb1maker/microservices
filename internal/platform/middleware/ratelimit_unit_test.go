@@ -7,9 +7,10 @@ import (
 	"net/http"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/google/uuid"
+
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,7 +29,7 @@ func TestRateLimit_blocksAfterLimit_miniredis(t *testing.T) {
 	client := goredis.NewClient(&goredis.Options{Addr: srv.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
 
-	userID := uuid.New()
+	userID := uuid.NewV7()
 	token, err := auth.IssueToken(testJWTSecret, userID, time.Hour)
 	require.NoError(t, err)
 

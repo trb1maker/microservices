@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/trb1maker/microservices/internal/analytics-service/app"
 	pkgmiddleware "github.com/trb1maker/microservices/internal/platform/middleware"
 )

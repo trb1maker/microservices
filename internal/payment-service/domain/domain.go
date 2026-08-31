@@ -1,6 +1,6 @@
 package domain
 
-import "github.com/google/uuid"
+import "uuid"
 
 // UserID is a domain identifier for a user.
 type UserID string
@@ -49,5 +49,5 @@ type Transaction struct {
 
 // NewTransactionID generates a new unique transaction ID.
 func NewTransactionID() TransactionID {
-	return TransactionID(uuid.New().String())
+	return TransactionID(uuid.NewV7().String())
 }

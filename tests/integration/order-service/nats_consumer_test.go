@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,8 +18,6 @@ import (
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 	"github.com/trb1maker/microservices/tests/internal/natstest"
-
-	"github.com/google/uuid"
 )
 
 const (
@@ -50,8 +49,8 @@ func TestConsumer_handleReservationFailed_routesToCartAndOrder(t *testing.T) {
 	carts := app.NewCartService(cartRepo, events)
 	orders := app.NewOrderService(cartRepo, orderRepo, events, app.NewNoopPaymentClient(), app.NewNoopOrderMetrics())
 
-	userID := domain.UserID(uuid.New())
-	productID := domain.ProductID(uuid.New())
+	userID := domain.UserID(uuid.NewV7())
+	productID := domain.ProductID(uuid.NewV7())
 	item, err := domain.NewOrderItem(productID, 1, 100)
 	require.NoError(t, err)
 	cart, err := domain.NewCart(userID, *item)
@@ -64,7 +63,7 @@ func TestConsumer_handleReservationFailed_routesToCartAndOrder(t *testing.T) {
 		orderID,
 		userID,
 		domain.OrderStatusPaid,
-		domain.PaymentID(uuid.New()),
+		domain.PaymentID(uuid.NewV7()),
 		"Moscow",
 		time.Now().UTC(),
 		time.Now().UTC(),

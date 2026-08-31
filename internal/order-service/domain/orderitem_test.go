@@ -2,8 +2,8 @@ package domain
 
 import (
 	"testing"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -11,7 +11,7 @@ import (
 func TestNewOrderItem(t *testing.T) {
 	t.Parallel()
 
-	validProductID := ProductID(uuid.New())
+	validProductID := ProductID(uuid.NewV7())
 
 	tests := []struct {
 		name      string
@@ -88,7 +88,7 @@ func TestNewOrderItem(t *testing.T) {
 func TestOrderItem_Merge(t *testing.T) {
 	t.Parallel()
 
-	productID := ProductID(uuid.New())
+	productID := ProductID(uuid.NewV7())
 
 	base, err := NewOrderItem(productID, 2, 100)
 	require.NoError(t, err)
@@ -96,7 +96,7 @@ func TestOrderItem_Merge(t *testing.T) {
 	addition, err := NewOrderItem(productID, 3, 100)
 	require.NoError(t, err)
 
-	otherProduct, err := NewOrderItem(ProductID(uuid.New()), 1, 50)
+	otherProduct, err := NewOrderItem(ProductID(uuid.NewV7()), 1, 50)
 	require.NoError(t, err)
 
 	differentPrice, err := NewOrderItem(productID, 1, 200)
