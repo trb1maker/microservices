@@ -27,9 +27,10 @@ import (
 	natsadapter "github.com/trb1maker/microservices/internal/order-service/adapters/event_publisher/nats"
 	httpadapter "github.com/trb1maker/microservices/internal/order-service/adapters/http"
 	orderpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/order_repository/postgres"
-	outboxrelay "github.com/trb1maker/microservices/internal/order-service/adapters/outbox_relay"
-	outboxpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/outbox_repository/postgres"
 	userpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/user_repository/postgres"
+	"github.com/trb1maker/microservices/internal/platform/outbox"
+	outboxnats "github.com/trb1maker/microservices/internal/platform/outbox/natspub"
+	outboxpg "github.com/trb1maker/microservices/internal/platform/outbox/pgstore"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -817,8 +818,7 @@ func newOutboxTestEnv(t *testing.T) *testEnv {
 	})
 
 	checkoutWriter := checkoutpostgres.NewWriter(pool)
-	outboxRepo := outboxpostgres.NewRepository(pool)
-	relay := outboxrelay.New(outboxRepo, natsClient, outboxrelay.Config{
+	relay := outbox.NewRelay(outboxpg.New(pool), outboxnats.New(natsClient), outbox.RelayConfig{
 		PollInterval: 100 * time.Millisecond,
 		BatchSize:    50,
 	})

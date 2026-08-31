@@ -18,14 +18,15 @@ import (
 	natsadapter "github.com/trb1maker/microservices/internal/order-service/adapters/event_publisher/nats"
 	httpadapter "github.com/trb1maker/microservices/internal/order-service/adapters/http"
 	orderpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/order_repository/postgres"
-	outboxrelay "github.com/trb1maker/microservices/internal/order-service/adapters/outbox_relay"
-	outboxpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/outbox_repository/postgres"
 	paymentgrpc "github.com/trb1maker/microservices/internal/order-service/adapters/payment/grpc"
 	userpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/user_repository/postgres"
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 	"github.com/trb1maker/microservices/internal/order-service/migrations"
 	"github.com/trb1maker/microservices/internal/platform/natsx"
+	"github.com/trb1maker/microservices/internal/platform/outbox"
+	outboxnats "github.com/trb1maker/microservices/internal/platform/outbox/natspub"
+	outboxpg "github.com/trb1maker/microservices/internal/platform/outbox/pgstore"
 
 	"github.com/trb1maker/microservices/internal/platform/health"
 )
@@ -125,8 +126,7 @@ func SetupStack(ctx context.Context, cfg Config) (*Stack, error) {
 		app.OrderCreatedSubject(cfg.Subjects.OrderCreated),
 	)
 
-	outboxRepo := outboxpostgres.NewRepository(ordersPool)
-	relayCancel := startOutboxRelay(ctx, outboxRepo, cfg.NatsClient)
+	relayCancel := startOutboxRelay(ctx, ordersPool, cfg.NatsClient)
 
 	consumer := natsconsumer.NewConsumer(cfg.NatsClient, natsconsumer.Subjects{
 		ItemsReserved:     cfg.Subjects.ItemsReserved,
@@ -166,8 +166,8 @@ func SetupStack(ctx context.Context, cfg Config) (*Stack, error) {
 	}, nil
 }
 
-func startOutboxRelay(ctx context.Context, store *outboxpostgres.Repository, client *natsx.Client) context.CancelFunc {
-	relay := outboxrelay.New(store, client, outboxrelay.Config{
+func startOutboxRelay(ctx context.Context, pool *pgxpool.Pool, client *natsx.Client) context.CancelFunc {
+	relay := outbox.NewRelay(outboxpg.New(pool), outboxnats.New(client), outbox.RelayConfig{
 		PollInterval: testOutboxPollInterval,
 		BatchSize:    testOutboxBatchSize,
 	})
