@@ -1,6 +1,7 @@
 package natstest
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -8,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/trb1maker/microservices/internal/platform/natsx"
 )
 
 const (
@@ -51,4 +54,14 @@ func Connect(t *testing.T, url string, opts ...nats.Option) *nats.Conn {
 		}
 		time.Sleep(connectRetryEvery)
 	}
+}
+
+// NewClient connects to NATS and initializes JetStream streams.
+func NewClient(t *testing.T, url string, opts ...nats.Option) *natsx.Client {
+	t.Helper()
+
+	conn := Connect(t, url, opts...)
+	client, err := natsx.New(context.Background(), conn)
+	require.NoError(t, err)
+	return client
 }
