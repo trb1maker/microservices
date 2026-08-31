@@ -41,13 +41,13 @@
 
 ### ADR 5. NATS как брокер сообщений
 **Контекст:** Асинхронное взаимодействие между 5 сервисами.  
-**Решение:** Использовать NATS с включенным JetStream.  
-**Обоснование:** NATS легковесен, идеально ложится в экосистему Go, имеет встроенный механизм гарантированной доставки (JetStream) и проще в настройке, чем Kafka, для учебного проекта.
+**Решение:** Использовать NATS с JetStream (file storage на одном узле, durable consumers с explicit Ack).  
+**Обоснование:** NATS легковесен, идеально ложится в экосистему Go, имеет встроенный механизм гарантированной доставки (JetStream) и проще в настройке, чем Kafka, для учебного проекта. Кластер NATS в compose не поднимаем — достаточно дискового store и restart одного брокера.
 
 ### ADR 6. MinIO + PostgreSQL для Аналитики
 **Контекст:** Требуется распределенное хранилище.  
-**Решение:** Analytics Service пишет сырые события в MinIO (как S3-совместимый бакет) в формате JSON (создание чеков/снепшотов заказов) и агрегированные данные в отдельную PostgreSQL-витрину.  
-**Обоснование:** MinIO запускается локально в Docker, имитируя облачное S3, и автоматически инициализируется через `init-container`. Это закрывает требование по распределенному хранилищу без привязки к внешним облачным провайдерам.
+**Решение:** Analytics Service пишет чеки в MinIO (JSON), агрегаты — в PostgreSQL-витрину, поиск — PostgreSQL FTS (`receipt_documents` + GIN). REST API: presigned URL и `GET /receipts/search`.  
+**Обоснование:** MinIO имитирует S3 локально; PostgreSQL FTS закрывает «индексатор + query API» без Elasticsearch в compose.
 
 ### ADR 7. Loki вместо Elastic
 **Контекст:** Сбор и хранение логов.  
@@ -61,6 +61,11 @@
 **Связь с сервисами:** один корневой `go.mod`; сервисы импортируют `github.com/trb1maker/microservices/internal/platform/...` и `github.com/trb1maker/microservices/internal/<service>/...`. Точки входа — `cmd/<service>/main.go`.  
 **Обоснование:** Единообразие логов и проб без дублирования и без `go.work` / отдельных модулей; gopls и CI работают из корня репозитория.  
 **Не входит в platform:** бизнес-сущности, use cases, миграции БД, env-структуры сервисов.
+
+### ADR 9. Transactional Outbox на checkout
+**Контекст:** Публикация `orders.created` после commit заказа не атомарна.  
+**Решение:** Таблица `outbox` в Order Service; checkout + outbox в одной TX; relay публикует в JetStream с `FOR UPDATE SKIP LOCKED`.  
+**Обоснование:** At-least-once доставка без 2PC; finalized/confirm остаются прямой JS-публикацией с idempotent republish finalized при redelivery.
 
 ---
 
