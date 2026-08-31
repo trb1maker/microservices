@@ -19,6 +19,7 @@ import (
 	"github.com/trb1maker/microservices/internal/platform/health"
 	"github.com/trb1maker/microservices/internal/platform/logging"
 	"github.com/trb1maker/microservices/internal/platform/metrics"
+	"github.com/trb1maker/microservices/internal/platform/natsx"
 	pkgotel "github.com/trb1maker/microservices/internal/platform/otel"
 
 	"github.com/nats-io/nats.go"
@@ -60,18 +61,18 @@ func run() error {
 		}
 	}()
 
-	nc, err := initNATS(cfg)
+	nc, err := initNATS(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("init nats: %w", err)
 	}
-	defer nc.Close()
+	defer nc.Conn().Close()
 
 	metricsServer := metrics.NewServer("notification_service", cfg.MetricsPath)
 	mux := metricsServer.Mux()
 	mux.HandleFunc("GET /health", health.LivenessHandler())
 	mux.HandleFunc("GET /ready", health.ReadinessHandler(health.NewChecker(map[string]health.CheckFunc{
 		"nats": func(context.Context) error {
-			if !nc.IsConnected() {
+			if !nc.Conn().IsConnected() {
 				return errNATSNotConnected
 			}
 			return nil
@@ -88,7 +89,7 @@ func run() error {
 		PaymentSucceeded: cfg.PaymentSucceededSubject,
 		RefundSucceeded:  cfg.RefundSucceededSubject,
 	}, svc)
-	if err := consumer.Start(); err != nil {
+	if err := consumer.Start(ctx); err != nil {
 		return fmt.Errorf("start consumer: %w", err)
 	}
 	defer consumer.Close()
@@ -109,7 +110,7 @@ func run() error {
 	return nil
 }
 
-func initNATS(cfg *config.Config) (*nats.Conn, error) {
+func initNATS(ctx context.Context, cfg *config.Config) (*natsx.Client, error) {
 	opts := []nats.Option{
 		nats.Name("notification-service"),
 		nats.Secure(&tls.Config{MinVersion: tls.VersionTLS12}),
@@ -125,6 +126,12 @@ func initNATS(cfg *config.Config) (*nats.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect nats: %w", err)
 	}
+
+	client, err := natsx.New(ctx, conn)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("init jetstream: %w", err)
+	}
 	slog.Info("connected to NATS", slog.String("url", cfg.NATSURL))
-	return conn, nil
+	return client, nil
 }

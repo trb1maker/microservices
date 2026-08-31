@@ -33,6 +33,7 @@ import (
 	"github.com/trb1maker/microservices/internal/platform/health"
 	"github.com/trb1maker/microservices/internal/platform/logging"
 	"github.com/trb1maker/microservices/internal/platform/metrics"
+	"github.com/trb1maker/microservices/internal/platform/natsx"
 	pkgotel "github.com/trb1maker/microservices/internal/platform/otel"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -83,11 +84,11 @@ func run() error {
 	}
 	defer pool.Close()
 
-	nc, err := initNATS(cfg)
+	nc, err := initNATS(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("init nats: %w", err)
 	}
-	defer nc.Close()
+	defer nc.Conn().Close()
 
 	paymentSvc := initPaymentService(pool, nc, cfg)
 
@@ -125,7 +126,7 @@ func initPostgres(ctx context.Context, databaseURL string) (*pgxpool.Pool, error
 	return pool, nil
 }
 
-func initNATS(cfg *config.Config) (*nats.Conn, error) {
+func initNATS(ctx context.Context, cfg *config.Config) (*natsx.Client, error) {
 	natsOpts := []nats.Option{
 		nats.Name("payment-service"),
 		nats.Secure(&tls.Config{
@@ -138,21 +139,27 @@ func initNATS(cfg *config.Config) (*nats.Conn, error) {
 		nats.RootCAs(cfg.NATSTLSCAFile),
 	)
 
-	nc, err := nats.Connect(cfg.NATSURL, natsOpts...)
+	conn, err := nats.Connect(cfg.NATSURL, natsOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("connect to NATS: %w", err)
 	}
 
+	client, err := natsx.New(ctx, conn)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("init jetstream: %w", err)
+	}
+
 	slog.Info("connected to NATS", slog.String("url", cfg.NATSURL))
-	return nc, nil
+	return client, nil
 }
 
-func initPaymentService(pool *pgxpool.Pool, nc *nats.Conn, cfg *config.Config) *app.PaymentService {
+func initPaymentService(pool *pgxpool.Pool, client *natsx.Client, cfg *config.Config) *app.PaymentService {
 	accountRepo := postgres.NewAccountRepository(pool)
 	transactionRepo := postgres.NewTransactionRepository(pool)
 
 	eventPub := eventpublisher.NewNATSEventPublisher(
-		nc,
+		client,
 		cfg.PaymentSucceededSubject,
 		cfg.PaymentFailedSubject,
 		cfg.RefundSucceededSubject,
@@ -162,7 +169,7 @@ func initPaymentService(pool *pgxpool.Pool, nc *nats.Conn, cfg *config.Config) *
 	return app.NewPaymentService(accountRepo, transactionRepo, eventPub)
 }
 
-func initMetrics(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, nc *nats.Conn) (*metrics.Server, *prometheus.CounterVec, error) {
+func initMetrics(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, client *natsx.Client) (*metrics.Server, *prometheus.CounterVec, error) {
 	metricsServer := metrics.NewServer("payment_service", cfg.MetricsPath)
 	grpcRequests := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "payment_service",
@@ -178,7 +185,7 @@ func initMetrics(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, nc
 			return pool.Ping(ctx)
 		},
 		"nats": func(context.Context) error {
-			if !nc.IsConnected() {
+			if !client.Conn().IsConnected() {
 				return errNATSNotConnected
 			}
 			return nil

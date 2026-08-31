@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/nats-io/nats.go"
 	natsadapter "github.com/trb1maker/microservices/internal/notification-service/adapters/nats"
 	"github.com/trb1maker/microservices/internal/notification-service/app"
+	"github.com/trb1maker/microservices/internal/platform/natsx"
 )
 
 type Subjects struct {
@@ -66,16 +66,16 @@ type Consumer struct {
 	sink     *RecordingSink
 }
 
-func StartConsumer(nc *nats.Conn, subjects Subjects) (*Consumer, error) {
+func StartConsumer(ctx context.Context, client *natsx.Client, subjects Subjects) (*Consumer, error) {
 	sink := &RecordingSink{}
 	svc := app.NewNotificationService(sink)
-	consumer := natsadapter.NewConsumer(nc, natsadapter.Subjects{
+	consumer := natsadapter.NewConsumer(client, natsadapter.Subjects{
 		OrderFinalized:   subjects.OrderFinalized,
 		OrderCancelled:   subjects.OrderCancelled,
 		PaymentSucceeded: subjects.PaymentSucceeded,
 		RefundSucceeded:  subjects.RefundSucceeded,
 	}, svc)
-	if err := consumer.Start(); err != nil {
+	if err := consumer.Start(context.WithoutCancel(ctx)); err != nil {
 		return nil, fmt.Errorf("start notification consumer: %w", err)
 	}
 	return &Consumer{consumer: consumer, sink: sink}, nil

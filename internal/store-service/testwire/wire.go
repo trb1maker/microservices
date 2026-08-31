@@ -9,6 +9,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
+	"github.com/trb1maker/microservices/internal/platform/natsx"
 	mongoadapter "github.com/trb1maker/microservices/internal/store-service/adapters/mongodb"
 	natsadapter "github.com/trb1maker/microservices/internal/store-service/adapters/nats"
 	"github.com/trb1maker/microservices/internal/store-service/app"
@@ -36,14 +37,14 @@ type Options struct {
 
 type Worker struct {
 	worker      *natsadapter.Worker
-	subs        []*nats.Subscription
 	confirmGate chan struct{}
+	subCount    int
 }
 
 func SetupStore(
 	ctx context.Context,
 	db *mongo.Database,
-	nc *nats.Conn,
+	client *natsx.Client,
 	subjects Subjects,
 	opts Options,
 ) (*Worker, error) {
@@ -57,7 +58,7 @@ func SetupStore(
 	productRepo := mongoadapter.NewProductRepository(db)
 	stockRepo := mongoadapter.NewStockRepository(db)
 	eventPub := natsadapter.NewEventPublisher(
-		nc,
+		client,
 		subjects.ItemsReserved,
 		subjects.ReservationFailed,
 		subjects.OrderConfirmed,
@@ -67,43 +68,47 @@ func SetupStore(
 	worker := natsadapter.NewWorker(storeSvc)
 
 	w := &Worker{worker: worker}
-	if err := w.subscribe(ctx, nc, subjects, opts.GateConfirm); err != nil {
+	if opts.GateConfirm {
+		w.confirmGate = make(chan struct{})
+	}
+
+	if err := w.subscribe(ctx, client, subjects, opts.GateConfirm); err != nil {
 		return nil, err
 	}
 	return w, nil
 }
 
-func (w *Worker) subscribe(ctx context.Context, nc *nats.Conn, subjects Subjects, gateConfirm bool) error {
-	_ = ctx
-	reserveSub, err := nc.Subscribe(subjects.ReserveItems, w.worker.HandleReserveItems)
-	if err != nil {
-		return fmt.Errorf("subscribe reserve items: %w", err)
-	}
+func (w *Worker) subscribe(ctx context.Context, client *natsx.Client, subjects Subjects, gateConfirm bool) error {
+	reserveHandler := natsx.Handler(w.worker.HandleReserveItems)
+	releaseHandler := natsx.Handler(w.worker.HandleReleaseReservation)
+	confirmHandler := natsx.Handler(w.worker.HandleConfirmOrder)
 
-	confirmHandler := nats.MsgHandler(w.worker.HandleConfirmOrder)
 	if gateConfirm {
-		w.confirmGate = make(chan struct{})
 		gate := w.confirmGate
-		confirmHandler = func(msg *nats.Msg) { //nolint:contextcheck // store NATS worker manages its own context
+		confirmHandler = func(ctx context.Context, msg *nats.Msg) error {
 			<-gate
-			w.worker.HandleConfirmOrder(msg)
+			return w.worker.HandleConfirmOrder(ctx, msg)
 		}
 	}
 
-	confirmSub, err := nc.Subscribe(subjects.ConfirmOrder, confirmHandler)
-	if err != nil {
-		_ = reserveSub.Unsubscribe()
-		return fmt.Errorf("subscribe confirm order: %w", err)
+	handlers := []struct {
+		subject string
+		durable string
+		handler natsx.Handler
+	}{
+		{subjects.ReserveItems, "test-store-reserve-items", reserveHandler},
+		{subjects.ConfirmOrder, "test-store-confirm-order", confirmHandler},
+		{subjects.ReleaseReservation, "test-store-release-reservation", releaseHandler},
 	}
 
-	releaseSub, err := nc.Subscribe(subjects.ReleaseReservation, w.worker.HandleReleaseReservation)
-	if err != nil {
-		_ = reserveSub.Unsubscribe()
-		_ = confirmSub.Unsubscribe()
-		return fmt.Errorf("subscribe release reservation: %w", err)
+	for _, item := range handlers {
+		stream := natsx.StreamForSubject(item.subject)
+		if _, err := client.ConsumeDurable(context.WithoutCancel(ctx), stream, item.durable, item.subject, item.handler, natsx.DurableConsumerConfig{}); err != nil {
+			return fmt.Errorf("subscribe %s: %w", item.subject, err)
+		}
+		w.subCount++
 	}
 
-	w.subs = []*nats.Subscription{reserveSub, confirmSub, releaseSub}
 	return nil
 }
 
@@ -119,19 +124,13 @@ func (w *Worker) ActiveSubscriptions() int {
 	if w == nil {
 		return 0
 	}
-	return len(w.subs)
+	return w.subCount
 }
 
 func (w *Worker) Close() {
 	if w == nil {
 		return
 	}
-	for _, sub := range w.subs {
-		if sub != nil {
-			_ = sub.Unsubscribe()
-		}
-	}
-	w.subs = nil
 	if w.worker != nil {
 		w.worker.Close()
 	}

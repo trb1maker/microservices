@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/nats-io/nats.go"
 	"github.com/trb1maker/microservices/internal/payment-service/app"
+	"github.com/trb1maker/microservices/internal/platform/natsx"
 )
 
-// NATSEventPublisher publishes payment events to NATS.
+// NATSEventPublisher publishes payment events to JetStream.
 type NATSEventPublisher struct {
-	conn                 *nats.Conn
+	client               *natsx.Client
 	paymentSucceededSubj string
 	paymentFailedSubj    string
 	refundSucceededSubj  string
@@ -20,14 +20,14 @@ type NATSEventPublisher struct {
 
 // NewNATSEventPublisher creates a new NATSEventPublisher.
 func NewNATSEventPublisher(
-	conn *nats.Conn,
+	client *natsx.Client,
 	paymentSucceededSubj,
 	paymentFailedSubj,
 	refundSucceededSubj,
 	refundFailedSubj string,
 ) *NATSEventPublisher {
 	return &NATSEventPublisher{
-		conn:                 conn,
+		client:               client,
 		paymentSucceededSubj: paymentSucceededSubj,
 		paymentFailedSubj:    paymentFailedSubj,
 		refundSucceededSubj:  refundSucceededSubj,
@@ -51,13 +51,13 @@ func (p *NATSEventPublisher) PublishRefundFailed(ctx context.Context, event app.
 	return p.publish(ctx, p.refundFailedSubj, event)
 }
 
-func (p *NATSEventPublisher) publish(_ context.Context, subject string, event any) error {
+func (p *NATSEventPublisher) publish(ctx context.Context, subject string, event any) error {
 	data, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
 
-	if err := p.conn.Publish(subject, data); err != nil {
+	if err := p.client.Publish(ctx, subject, data); err != nil {
 		return fmt.Errorf("publish to %s: %w", subject, err)
 	}
 	return nil
