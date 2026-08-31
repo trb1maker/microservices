@@ -27,6 +27,7 @@ import (
 	natsadapter "github.com/trb1maker/microservices/internal/order-service/adapters/event_publisher/nats"
 	httpadapter "github.com/trb1maker/microservices/internal/order-service/adapters/http"
 	orderpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/order_repository/postgres"
+	paymentgrpc "github.com/trb1maker/microservices/internal/order-service/adapters/payment/grpc"
 	userpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/user_repository/postgres"
 	"github.com/trb1maker/microservices/internal/platform/outbox"
 	outboxnats "github.com/trb1maker/microservices/internal/platform/outbox/natspub"
@@ -85,8 +86,13 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func newTestEnv(t *testing.T) *testEnv {
+func newTestEnv(t *testing.T, paymentClient ...app.PaymentClient) *testEnv {
 	t.Helper()
+
+	var payment app.PaymentClient = app.NewNoopPaymentClient()
+	if len(paymentClient) > 0 && paymentClient[0] != nil {
+		payment = paymentClient[0]
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), startupTimeout)
 	defer cancel()
@@ -140,6 +146,14 @@ func newTestEnv(t *testing.T) *testEnv {
 	natsClient := natstest.NewClient(t, natsURL)
 	t.Cleanup(natsClient.Conn().Close)
 
+	relay := outbox.NewRelay(outboxpg.New(pool), outboxnats.New(natsClient), outbox.RelayConfig{
+		PollInterval: 100 * time.Millisecond,
+		BatchSize:    50,
+	})
+	relayCtx, relayCancel := context.WithCancel(consumerCtx)
+	go func() { _ = relay.Run(relayCtx) }()
+	t.Cleanup(relayCancel)
+
 	_, err = natsClient.ConsumeDurable(consumerCtx, "CART", "test-mock-store-reserve", reserveItemsSubject, func(_ context.Context, msg *nats.Msg) error {
 		var req struct {
 			UserID    string `json:"user_id"`
@@ -177,7 +191,21 @@ func newTestEnv(t *testing.T) *testEnv {
 	})
 
 	cartService := app.NewCartService(cartRepo, events)
-	orderService := app.NewOrderService(cartRepo, orderRepo, events, app.NewNoopPaymentClient(), app.NewNoopOrderMetrics())
+	checkoutWriter := checkoutpostgres.NewWriter(pool)
+	orderService := app.NewOrderService(
+		cartRepo,
+		orderRepo,
+		events,
+		payment,
+		app.NewNoopOrderMetrics(),
+		checkoutWriter,
+		app.OrderCreatedSubject(orderCreatedSubject),
+		app.OrderEventSubjects{
+			ConfirmOrder:   confirmOrderSubject,
+			OrderFinalized: orderFinalizedSubject,
+			OrderCancelled: orderCancelledSubject,
+		},
+	)
 	consumer := natsconsumer.NewConsumer(natsClient, natsconsumer.Subjects{
 		ItemsReserved:     itemsReservedSubject,
 		ReservationFailed: "store.reservation_failed",
@@ -831,8 +859,15 @@ func newOutboxTestEnv(t *testing.T) *testEnv {
 		cartRepo,
 		orderRepo,
 		events,
+		app.NewNoopPaymentClient(),
+		app.NewNoopOrderMetrics(),
 		checkoutWriter,
 		app.OrderCreatedSubject(orderCreatedSubject),
+		app.OrderEventSubjects{
+			ConfirmOrder:   confirmOrderSubject,
+			OrderFinalized: orderFinalizedSubject,
+			OrderCancelled: orderCancelledSubject,
+		},
 	)
 	consumer := natsconsumer.NewConsumer(natsClient, natsconsumer.Subjects{
 		ItemsReserved:     itemsReservedSubject,
@@ -886,6 +921,53 @@ func (env *testEnv) waitForReservedCart(t *testing.T) {
 		}
 		return cart.AllItemsReserved()
 	}, 5*time.Second, 50*time.Millisecond)
+}
+
+func TestIntegration_PayOrder_PaymentUnavailable(t *testing.T) {
+	deadPayment, err := paymentgrpc.NewPaymentClient(context.Background(), paymentgrpc.ClientConfig{
+		Addr:       "127.0.0.1:1",
+		Insecure:   true,
+		RPCTimeout: 500 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = deadPayment.Close() })
+
+	env := newTestEnv(t, deadPayment)
+	productID := uuid.NewV7().String()
+
+	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
+		`{"product_id":"%s","quantity":1,"unit_price":100}`,
+		productID,
+	))
+	require.Equal(t, http.StatusCreated, addResp.StatusCode)
+	_ = addResp.Body.Close()
+	env.waitForReservedCart(t)
+
+	checkoutResp := env.doJSON(t, http.MethodPost, "/orders", env.token, `{"delivery_address":"Moscow"}`)
+	require.Equal(t, http.StatusCreated, checkoutResp.StatusCode)
+	var order struct {
+		OrderID string `json:"order_id"`
+		Status  string `json:"status"`
+	}
+	require.NoError(t, json.NewDecoder(checkoutResp.Body).Decode(&order))
+	_ = checkoutResp.Body.Close()
+	assert.Equal(t, "RESERVED", order.Status)
+
+	start := time.Now()
+	payResp := env.doJSON(t, http.MethodPost, "/orders/"+order.OrderID+"/pay", env.token, "")
+	elapsed := time.Since(start)
+	t.Cleanup(func() { _ = payResp.Body.Close() })
+	assert.Equal(t, http.StatusServiceUnavailable, payResp.StatusCode)
+	assert.Less(t, elapsed, 2*time.Second)
+
+	var current struct {
+		Status string `json:"status"`
+	}
+	getResp := env.doJSON(t, http.MethodGet, "/orders/"+order.OrderID, env.token, "")
+	require.Equal(t, http.StatusOK, getResp.StatusCode)
+	require.NoError(t, json.NewDecoder(getResp.Body).Decode(&current))
+	_ = getResp.Body.Close()
+	assert.Equal(t, "RESERVED", current.Status)
 }
 
 func (env *testEnv) doJSON(t *testing.T, method, path, token, body string) *http.Response {

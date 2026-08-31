@@ -10,11 +10,14 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/trb1maker/microservices/internal/platform/otel/natsprop"
+	"github.com/trb1maker/microservices/internal/platform/retry"
 )
 
 const (
-	defaultMaxDeliver = 10
-	defaultNakDelay   = 2 * time.Second
+	defaultMaxDeliver  = 10
+	defaultNakDelay    = 2 * time.Second
+	defaultMaxNakDelay = 30 * time.Second
+	defaultNakJitter   = 0.2
 )
 
 var ErrStreamRequired = errors.New("jetstream stream is required")
@@ -186,7 +189,12 @@ func ackDurable(msg jetstream.Msg) {
 	}
 }
 
-func nakDurable(msg jetstream.Msg, delay time.Duration) {
+func nakDurable(msg jetstream.Msg, baseDelay time.Duration) {
+	delay := baseDelay
+	if meta, err := msg.Metadata(); err == nil {
+		attempt := int(meta.NumDelivered) //nolint:gosec // NumDelivered is bounded by MaxDeliver
+		delay = retry.BackoffWithJitter(attempt, baseDelay, defaultMaxNakDelay, defaultNakJitter)
+	}
 	if err := msg.NakWithDelay(delay); err != nil {
 		slog.Error("jetstream nak failed", slog.Any("error", err))
 	}

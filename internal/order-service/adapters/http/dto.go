@@ -53,6 +53,8 @@ func mapError(err error) (int, string) {
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, app.ErrPaymentFailed):
 		return http.StatusPaymentRequired, err.Error()
+	case errors.Is(err, app.ErrPaymentUnavailable):
+		return http.StatusServiceUnavailable, err.Error()
 	default:
 		if _, ok := errors.AsType[*json.SyntaxError](err); ok {
 			return http.StatusBadRequest, msgInvalidRequestBody
