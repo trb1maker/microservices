@@ -128,6 +128,27 @@ func TestReserveItems_Success(t *testing.T) {
 	assert.Equal(t, 2, events.itemsReserved[0].Quantity)
 }
 
+func TestReserveItems_IdempotentForSameOrder(t *testing.T) {
+	products := newMockProductRepo()
+	stocks := newMockStockRepo()
+	events := newMockEventPublisher()
+	svc := NewStoreService(products, stocks, events, nil)
+	req := ReserveItemsRequest{
+		OrderID:   testOrderID,
+		UserID:    testUserID,
+		ProductID: testProductID,
+		Quantity:  2,
+	}
+
+	require.NoError(t, svc.ReserveItems(context.Background(), req))
+	require.NoError(t, svc.ReserveItems(context.Background(), req))
+
+	stock := stocks.stocks[testProductID]
+	assert.Equal(t, 8, stock.Available)
+	assert.Equal(t, 2, stock.Reserved)
+	require.Len(t, events.itemsReserved, 2)
+}
+
 func TestReserveItems_InvalidQuantity(t *testing.T) {
 	svc := NewStoreService(newMockProductRepo(), newMockStockRepo(), newMockEventPublisher(), nil)
 

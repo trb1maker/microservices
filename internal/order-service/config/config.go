@@ -44,10 +44,11 @@ type Config struct {
 	ReservationFailedSubject  string `env:"RESERVATION_FAILED_SUBJECT" envDefault:"store.reservation_failed"`
 	OrderConfirmedSubject     string `env:"ORDER_CONFIRMED_SUBJECT" envDefault:"store.order_confirmed"`
 
-	GRPCAddr         string `env:"GRPC_ADDR" envDefault:":50052"`
-	PaymentGRPCAddr  string `env:"PAYMENT_GRPC_ADDR" envDefault:"payment-service:50051"`
-	StoreHealthURL   string `env:"STORE_HEALTH_URL" envDefault:"http://store-service:9092/ready"`
-	PaymentHealthURL string `env:"PAYMENT_HEALTH_URL" envDefault:"http://payment-service:9091/ready"`
+	GRPCAddr          string        `env:"GRPC_ADDR" envDefault:":50052"`
+	PaymentGRPCAddr   string        `env:"PAYMENT_GRPC_ADDR" envDefault:"payment-service:50051"`
+	PaymentRPCTimeout time.Duration `env:"PAYMENT_RPC_TIMEOUT" envDefault:"2s"`
+	StoreHealthURL    string        `env:"STORE_HEALTH_URL" envDefault:"http://store-service:9092/ready"`
+	PaymentHealthURL  string        `env:"PAYMENT_HEALTH_URL" envDefault:"http://payment-service:9091/ready"`
 
 	JWTSecret       string        `env:"JWT_SECRET"`
 	JWTTTL          time.Duration `env:"JWT_TTL" envDefault:"24h"`

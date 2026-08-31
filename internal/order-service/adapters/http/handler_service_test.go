@@ -6,13 +6,13 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+	"uuid"
 
 	cartmemory "github.com/trb1maker/microservices/internal/order-service/adapters/cart_repository/memory"
 	ordermemory "github.com/trb1maker/microservices/internal/order-service/adapters/order_repository/memory"
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	pkgmiddleware "github.com/trb1maker/microservices/internal/platform/middleware"
@@ -21,9 +21,9 @@ import (
 func TestGetOrder_serviceIdentity(t *testing.T) {
 	t.Parallel()
 
-	userID := domain.UserID(uuid.New())
-	orderID := domain.OrderID(uuid.New())
-	productID := domain.ProductID(uuid.New())
+	userID := domain.UserID(uuid.NewV7())
+	orderID := domain.OrderID(uuid.NewV7())
+	productID := domain.ProductID(uuid.NewV7())
 
 	item, err := domain.NewOrderItem(productID, 1, 100)
 	require.NoError(t, err)
@@ -32,7 +32,7 @@ func TestGetOrder_serviceIdentity(t *testing.T) {
 		orderID,
 		userID,
 		domain.OrderStatusPending,
-		domain.PaymentID(uuid.Nil),
+		domain.PaymentID(uuid.Nil()),
 		"Moscow",
 		time.Now().UTC(),
 		time.Now().UTC(),

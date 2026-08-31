@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -13,12 +14,20 @@ import (
 	"github.com/trb1maker/microservices/internal/payment-service/app"
 	"github.com/trb1maker/microservices/internal/payment-service/migrations"
 	"github.com/trb1maker/microservices/internal/platform/natsx"
+	"github.com/trb1maker/microservices/internal/platform/outbox"
+	outboxnats "github.com/trb1maker/microservices/internal/platform/outbox/natspub"
+	outboxpg "github.com/trb1maker/microservices/internal/platform/outbox/pgstore"
 
 	paymentpb "github.com/trb1maker/microservices/internal/platform/proto/payment"
 
 	"google.golang.org/grpc"
 	grpchealth "google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
+)
+
+const (
+	testOutboxPollInterval = 50 * time.Millisecond
+	testOutboxBatchSize    = 50
 )
 
 type Subjects struct {
@@ -29,9 +38,10 @@ type Subjects struct {
 }
 
 type GRPCServer struct {
-	Addr   string
-	server *grpc.Server
-	lis    net.Listener
+	Addr        string
+	server      *grpc.Server
+	lis         net.Listener
+	relayCancel context.CancelFunc
 }
 
 func SetupDatabase(ctx context.Context, connStr string) (*pgxpool.Pool, error) {
@@ -65,17 +75,24 @@ func SeedAccount(ctx context.Context, pool *pgxpool.Pool, userID string, balance
 func StartInsecureGRPC(ctx context.Context, pool *pgxpool.Pool, client *natsx.Client, subjects Subjects) (*GRPCServer, error) {
 	accountRepo := pgadapter.NewAccountRepository(pool)
 	txRepo := pgadapter.NewTransactionRepository(pool)
-	eventPub := eventpublisher.NewNATSEventPublisher(
-		client,
+	eventPub := eventpublisher.NewOutboxPublisher(
+		pool,
 		subjects.PaymentSucceeded,
 		subjects.PaymentFailed,
 		subjects.RefundSucceeded,
 		subjects.RefundFailed,
 	)
 	svc := app.NewPaymentService(accountRepo, txRepo, eventPub)
+	relayCtx, relayCancel := context.WithCancel(context.WithoutCancel(ctx))
+	relay := outbox.NewRelay(outboxpg.New(pool), outboxnats.New(client), outbox.RelayConfig{
+		PollInterval: testOutboxPollInterval,
+		BatchSize:    testOutboxBatchSize,
+	})
+	go func() { _ = relay.Run(relayCtx) }()
 
 	lis, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
+		relayCancel()
 		return nil, fmt.Errorf("listen grpc: %w", err)
 	}
 
@@ -89,11 +106,17 @@ func StartInsecureGRPC(ctx context.Context, pool *pgxpool.Pool, client *natsx.Cl
 		_ = srv.Serve(lis)
 	}()
 
-	return &GRPCServer{Addr: lis.Addr().String(), server: srv, lis: lis}, nil
+	return &GRPCServer{Addr: lis.Addr().String(), server: srv, lis: lis, relayCancel: relayCancel}, nil
 }
 
 func (s *GRPCServer) Close() {
-	if s == nil || s.server == nil {
+	if s == nil {
+		return
+	}
+	if s.relayCancel != nil {
+		s.relayCancel()
+	}
+	if s.server == nil {
 		return
 	}
 	s.server.GracefulStop()

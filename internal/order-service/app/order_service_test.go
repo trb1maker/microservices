@@ -7,12 +7,12 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"uuid"
 
 	cartmemory "github.com/trb1maker/microservices/internal/order-service/adapters/cart_repository/memory"
 	ordermemory "github.com/trb1maker/microservices/internal/order-service/adapters/order_repository/memory"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -73,9 +73,9 @@ func setupOrderService(t *testing.T, events EventPublisher) (*OrderService, doma
 
 	cartRepo := cartmemory.NewCartRepository()
 	orderRepo := ordermemory.NewOrderRepository()
-	userID := domain.UserID(uuid.New())
+	userID := domain.UserID(uuid.NewV7())
 
-	item, err := domain.NewOrderItem(domain.ProductID(uuid.New()), 1, 100)
+	item, err := domain.NewOrderItem(domain.ProductID(uuid.NewV7()), 1, 100)
 	require.NoError(t, err)
 
 	cart, err := domain.NewCart(userID, *item)
@@ -137,7 +137,7 @@ func TestOrderService_GetOrder_wrongUser(t *testing.T) {
 	order, err := service.Checkout(t.Context(), userID, "Moscow", time.Now())
 	require.NoError(t, err)
 
-	otherUser := domain.UserID(uuid.New())
+	otherUser := domain.UserID(uuid.NewV7())
 	got, err := service.GetOrder(t.Context(), otherUser, order.OrderID())
 	require.ErrorIs(t, err, ErrOrderNotFound)
 	assert.Nil(t, got)
@@ -170,7 +170,7 @@ func TestOrderService_CancelOrder_wrongUser(t *testing.T) {
 	order, err := service.Checkout(t.Context(), userID, "Moscow", time.Now())
 	require.NoError(t, err)
 
-	otherUser := domain.UserID(uuid.New())
+	otherUser := domain.UserID(uuid.NewV7())
 	cancelled, err := service.CancelOrder(t.Context(), otherUser, order.OrderID(), time.Now())
 	require.ErrorIs(t, err, ErrOrderNotFound)
 	assert.Nil(t, cancelled)
@@ -275,9 +275,9 @@ func TestOrderService_Checkout_publishFailureWithRollbackFailure(t *testing.T) {
 		inner:     ordermemory.NewOrderRepository(),
 		deleteErr: errDeleteUnavailable,
 	}
-	userID := domain.UserID(uuid.New())
+	userID := domain.UserID(uuid.NewV7())
 
-	item, err := domain.NewOrderItem(domain.ProductID(uuid.New()), 1, 100)
+	item, err := domain.NewOrderItem(domain.ProductID(uuid.NewV7()), 1, 100)
 	require.NoError(t, err)
 
 	cart, err := domain.NewCart(userID, *item)
@@ -321,9 +321,9 @@ func TestOrderService_Checkout_updatesActiveOrdersMetric(t *testing.T) {
 	events := &recordingEventPublisher{}
 	cartRepo := cartmemory.NewCartRepository()
 	orderRepo := ordermemory.NewOrderRepository()
-	userID := domain.UserID(uuid.New())
+	userID := domain.UserID(uuid.NewV7())
 
-	item, err := domain.NewOrderItem(domain.ProductID(uuid.New()), 1, 100)
+	item, err := domain.NewOrderItem(domain.ProductID(uuid.NewV7()), 1, 100)
 	require.NoError(t, err)
 
 	cart, err := domain.NewCart(userID, *item)

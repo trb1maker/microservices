@@ -3,8 +3,8 @@ package domain
 import (
 	"testing"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,8 +21,8 @@ func mustOrderItem(t *testing.T, productID ProductID, quantity, unitPrice int64)
 func TestNewCart(t *testing.T) {
 	t.Parallel()
 
-	userID := UserID(uuid.New())
-	item := mustOrderItem(t, ProductID(uuid.New()), 1, 100)
+	userID := UserID(uuid.NewV7())
+	item := mustOrderItem(t, ProductID(uuid.NewV7()), 1, 100)
 
 	tests := []struct {
 		name    string
@@ -72,9 +72,9 @@ func TestNewCart(t *testing.T) {
 func TestCart_AddItem(t *testing.T) {
 	t.Parallel()
 
-	userID := UserID(uuid.New())
-	productA := ProductID(uuid.New())
-	productB := ProductID(uuid.New())
+	userID := UserID(uuid.NewV7())
+	productA := ProductID(uuid.NewV7())
+	productB := ProductID(uuid.NewV7())
 
 	cart, err := NewCart(userID)
 	require.NoError(t, err)
@@ -98,22 +98,22 @@ func TestCart_AddItem(t *testing.T) {
 func TestCart_AddItem_updatesUpdatedAt(t *testing.T) {
 	t.Parallel()
 
-	userID := UserID(uuid.New())
+	userID := UserID(uuid.NewV7())
 	cart, err := NewCart(userID)
 	require.NoError(t, err)
 
 	updatedAt := cart.UpdatedAt()
 	time.Sleep(time.Millisecond)
 
-	require.NoError(t, cart.AddItem(mustOrderItem(t, ProductID(uuid.New()), 1, 100)))
+	require.NoError(t, cart.AddItem(mustOrderItem(t, ProductID(uuid.NewV7()), 1, 100)))
 	assert.True(t, cart.UpdatedAt().After(updatedAt))
 }
 
 func TestCart_AddItem_rejectsUnitPriceMismatch(t *testing.T) {
 	t.Parallel()
 
-	userID := UserID(uuid.New())
-	productID := ProductID(uuid.New())
+	userID := UserID(uuid.NewV7())
+	productID := ProductID(uuid.NewV7())
 
 	cart, err := NewCart(userID, mustOrderItem(t, productID, 1, 100))
 	require.NoError(t, err)
@@ -126,9 +126,9 @@ func TestCart_AddItem_rejectsUnitPriceMismatch(t *testing.T) {
 func TestCart_RemoveItem(t *testing.T) {
 	t.Parallel()
 
-	userID := UserID(uuid.New())
-	productA := ProductID(uuid.New())
-	productB := ProductID(uuid.New())
+	userID := UserID(uuid.NewV7())
+	productA := ProductID(uuid.NewV7())
+	productB := ProductID(uuid.NewV7())
 
 	t.Run("removes existing item", func(t *testing.T) {
 		t.Parallel()
@@ -150,7 +150,7 @@ func TestCart_RemoveItem(t *testing.T) {
 		c, err := NewCart(userID, mustOrderItem(t, productA, 1, 100))
 		require.NoError(t, err)
 
-		err = c.RemoveItem(ProductID(uuid.New()))
+		err = c.RemoveItem(ProductID(uuid.NewV7()))
 		require.ErrorIs(t, err, ErrItemNotFound)
 	})
 }
@@ -158,8 +158,8 @@ func TestCart_RemoveItem(t *testing.T) {
 func TestCart_RemoveItem_updatesUpdatedAt(t *testing.T) {
 	t.Parallel()
 
-	userID := UserID(uuid.New())
-	productID := ProductID(uuid.New())
+	userID := UserID(uuid.NewV7())
+	productID := ProductID(uuid.NewV7())
 
 	cart, err := NewCart(userID, mustOrderItem(t, productID, 1, 100))
 	require.NoError(t, err)
@@ -174,10 +174,10 @@ func TestCart_RemoveItem_updatesUpdatedAt(t *testing.T) {
 func TestCart_Items(t *testing.T) {
 	t.Parallel()
 
-	userID := UserID(uuid.New())
+	userID := UserID(uuid.NewV7())
 	items := []OrderItem{
-		mustOrderItem(t, ProductID(uuid.New()), 1, 100),
-		mustOrderItem(t, ProductID(uuid.New()), 2, 50),
+		mustOrderItem(t, ProductID(uuid.NewV7()), 1, 100),
+		mustOrderItem(t, ProductID(uuid.NewV7()), 2, 50),
 	}
 
 	cart, err := NewCart(userID, items...)
@@ -188,12 +188,12 @@ func TestCart_Items(t *testing.T) {
 func TestCart_Items_returnsClone(t *testing.T) {
 	t.Parallel()
 
-	userID := UserID(uuid.New())
-	cart, err := NewCart(userID, mustOrderItem(t, ProductID(uuid.New()), 1, 100))
+	userID := UserID(uuid.NewV7())
+	cart, err := NewCart(userID, mustOrderItem(t, ProductID(uuid.NewV7()), 1, 100))
 	require.NoError(t, err)
 
 	items := cart.Items()
-	items[0] = mustOrderItem(t, ProductID(uuid.New()), 99, 1)
+	items[0] = mustOrderItem(t, ProductID(uuid.NewV7()), 99, 1)
 
 	assert.Len(t, cart.Items(), 1)
 	assert.Equal(t, int64(1), cart.Items()[0].Quantity())
@@ -202,10 +202,10 @@ func TestCart_Items_returnsClone(t *testing.T) {
 func TestCart_TotalPrice(t *testing.T) {
 	t.Parallel()
 
-	userID := UserID(uuid.New())
+	userID := UserID(uuid.NewV7())
 	cart, err := NewCart(userID,
-		mustOrderItem(t, ProductID(uuid.New()), 1, 100),
-		mustOrderItem(t, ProductID(uuid.New()), 2, 50),
+		mustOrderItem(t, ProductID(uuid.NewV7()), 1, 100),
+		mustOrderItem(t, ProductID(uuid.NewV7()), 2, 50),
 	)
 	require.NoError(t, err)
 
@@ -215,8 +215,8 @@ func TestCart_TotalPrice(t *testing.T) {
 func TestCart_Clear(t *testing.T) {
 	t.Parallel()
 
-	userID := UserID(uuid.New())
-	cart, err := NewCart(userID, mustOrderItem(t, ProductID(uuid.New()), 1, 100))
+	userID := UserID(uuid.NewV7())
+	cart, err := NewCart(userID, mustOrderItem(t, ProductID(uuid.NewV7()), 1, 100))
 	require.NoError(t, err)
 
 	updatedAt := cart.UpdatedAt()
@@ -231,8 +231,8 @@ func TestCart_Clear(t *testing.T) {
 func TestReconstituteCart(t *testing.T) {
 	t.Parallel()
 
-	userID := UserID(uuid.New())
-	item := mustOrderItem(t, ProductID(uuid.New()), 1, 100)
+	userID := UserID(uuid.NewV7())
+	item := mustOrderItem(t, ProductID(uuid.NewV7()), 1, 100)
 	updatedAt := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
 	cart, err := ReconstituteCart(userID, OrderID{}, updatedAt, item)
@@ -246,13 +246,13 @@ func TestReconstituteCart(t *testing.T) {
 func TestCart_Checkout(t *testing.T) {
 	t.Parallel()
 
-	userID := UserID(uuid.New())
+	userID := UserID(uuid.NewV7())
 	now := time.Now()
 
 	t.Run("creates reserved order from fully reserved cart", func(t *testing.T) {
 		t.Parallel()
 
-		item := mustOrderItem(t, ProductID(uuid.New()), 1, 100)
+		item := mustOrderItem(t, ProductID(uuid.NewV7()), 1, 100)
 		cart, err := NewCart(userID, item)
 		require.NoError(t, err)
 		cart.EnsurePendingOrderID()

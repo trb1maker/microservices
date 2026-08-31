@@ -8,12 +8,12 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+	"uuid"
 
 	httpadapter "github.com/trb1maker/microservices/internal/order-service/adapters/http"
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/trb1maker/microservices/internal/platform/auth"
@@ -48,7 +48,7 @@ func TestLogin_success(t *testing.T) {
 	hash, err := auth.HashPassword("demo123")
 	require.NoError(t, err)
 
-	userID := domain.UserID(uuid.New())
+	userID := domain.UserID(uuid.NewV7())
 	repo := loginUserRepo{user: domain.NewUser(userID, "demo@example.com", hash, time.Now())}
 	server := newAuthTestServer(t, repo)
 	t.Cleanup(server.Close)
@@ -82,7 +82,7 @@ func TestLogin_invalidPassword(t *testing.T) {
 	hash, err := auth.HashPassword("demo123")
 	require.NoError(t, err)
 
-	userID := domain.UserID(uuid.New())
+	userID := domain.UserID(uuid.NewV7())
 	repo := loginUserRepo{user: domain.NewUser(userID, "demo@example.com", hash, time.Now())}
 	server := newAuthTestServer(t, repo)
 	t.Cleanup(server.Close)

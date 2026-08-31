@@ -39,6 +39,11 @@ func ReadinessHandler(checker *Checker) http.HandlerFunc {
 	}
 }
 
+func Mount(mux *http.ServeMux, checker *Checker) {
+	mux.HandleFunc("GET /health", LivenessHandler())
+	mux.HandleFunc("GET /ready", ReadinessHandler(checker))
+}
+
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

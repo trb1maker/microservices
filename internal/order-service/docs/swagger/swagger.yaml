@@ -103,6 +103,10 @@ paths:
           description: Conflict
           schema:
             $ref: '#/definitions/http.errorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/http.errorResponse'
       security:
       - BearerAuth: []
       summary: Pay for a reserved order

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
@@ -26,11 +27,12 @@ import (
 	natsadapter "github.com/trb1maker/microservices/internal/order-service/adapters/event_publisher/nats"
 	httpadapter "github.com/trb1maker/microservices/internal/order-service/adapters/http"
 	orderpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/order_repository/postgres"
-	outboxrelay "github.com/trb1maker/microservices/internal/order-service/adapters/outbox_relay"
-	outboxpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/outbox_repository/postgres"
+	paymentgrpc "github.com/trb1maker/microservices/internal/order-service/adapters/payment/grpc"
 	userpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/user_repository/postgres"
+	"github.com/trb1maker/microservices/internal/platform/outbox"
+	outboxnats "github.com/trb1maker/microservices/internal/platform/outbox/natspub"
+	outboxpg "github.com/trb1maker/microservices/internal/platform/outbox/pgstore"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/nats-io/nats.go"
@@ -84,8 +86,13 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func newTestEnv(t *testing.T) *testEnv {
+func newTestEnv(t *testing.T, paymentClient ...app.PaymentClient) *testEnv {
 	t.Helper()
+
+	var payment app.PaymentClient = app.NewNoopPaymentClient()
+	if len(paymentClient) > 0 && paymentClient[0] != nil {
+		payment = paymentClient[0]
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), startupTimeout)
 	defer cancel()
@@ -139,6 +146,14 @@ func newTestEnv(t *testing.T) *testEnv {
 	natsClient := natstest.NewClient(t, natsURL)
 	t.Cleanup(natsClient.Conn().Close)
 
+	relay := outbox.NewRelay(outboxpg.New(pool), outboxnats.New(natsClient), outbox.RelayConfig{
+		PollInterval: 100 * time.Millisecond,
+		BatchSize:    50,
+	})
+	relayCtx, relayCancel := context.WithCancel(consumerCtx)
+	go func() { _ = relay.Run(relayCtx) }()
+	t.Cleanup(relayCancel)
+
 	_, err = natsClient.ConsumeDurable(consumerCtx, "CART", "test-mock-store-reserve", reserveItemsSubject, func(_ context.Context, msg *nats.Msg) error {
 		var req struct {
 			UserID    string `json:"user_id"`
@@ -176,7 +191,21 @@ func newTestEnv(t *testing.T) *testEnv {
 	})
 
 	cartService := app.NewCartService(cartRepo, events)
-	orderService := app.NewOrderService(cartRepo, orderRepo, events, app.NewNoopPaymentClient(), app.NewNoopOrderMetrics())
+	checkoutWriter := checkoutpostgres.NewWriter(pool)
+	orderService := app.NewOrderService(
+		cartRepo,
+		orderRepo,
+		events,
+		payment,
+		app.NewNoopOrderMetrics(),
+		checkoutWriter,
+		app.OrderCreatedSubject(orderCreatedSubject),
+		app.OrderEventSubjects{
+			ConfirmOrder:   confirmOrderSubject,
+			OrderFinalized: orderFinalizedSubject,
+			OrderCancelled: orderCancelledSubject,
+		},
+	)
 	consumer := natsconsumer.NewConsumer(natsClient, natsconsumer.Subjects{
 		ItemsReserved:     itemsReservedSubject,
 		ReservationFailed: "store.reservation_failed",
@@ -269,7 +298,7 @@ func TestIntegration_Ready(t *testing.T) {
 func TestIntegration_CheckoutHappyPath(t *testing.T) {
 	env := newTestEnv(t)
 
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 
 	eventCh := make(chan []byte, 1)
 	env.subscribeJS(t, orderCreatedSubject, "test-checkout-order-created", func(_ context.Context, msg *nats.Msg) error {
@@ -372,7 +401,7 @@ func TestIntegration_CheckoutEmptyCart(t *testing.T) {
 func TestIntegration_CancelOrder(t *testing.T) {
 	env := newTestEnv(t)
 
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 
 	cancelledCh := make(chan []byte, 1)
 	releaseCh := make(chan []byte, 1)
@@ -451,7 +480,7 @@ func TestIntegration_GetOrder_wrongUser(t *testing.T) {
 	env := newTestEnv(t)
 
 	otherToken := env.login(t, "admin@example.com", "admin123")
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 
 	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
@@ -478,7 +507,7 @@ func TestIntegration_GetOrder_wrongUser(t *testing.T) {
 func TestIntegration_CartUpdatedAtRoundTrip(t *testing.T) {
 	env := newTestEnv(t)
 
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 
 	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
@@ -506,7 +535,7 @@ func TestIntegration_CartUpdatedAtRoundTrip(t *testing.T) {
 func TestIntegration_CartTTL(t *testing.T) {
 	env := newTestEnv(t)
 
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 	resp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
 		productID,
@@ -522,7 +551,7 @@ func TestIntegration_CartTTL(t *testing.T) {
 // Store не поднимается: orderConfirmed публикуется в NATS вручную.
 func TestIntegration_PayToConfirmed_SimulatedStoreConfirm(t *testing.T) {
 	env := newTestEnv(t)
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 
 	finalizedCh := make(chan []byte, 1)
 	env.subscribeJS(t, orderFinalizedSubject, "test-pay-confirmed-finalized", func(_ context.Context, msg *nats.Msg) error {
@@ -605,7 +634,7 @@ func TestIntegration_PayToConfirmed_SimulatedStoreConfirm(t *testing.T) {
 
 func TestIntegration_CancelPaidOrder(t *testing.T) {
 	env := newTestEnv(t)
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 
 	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
@@ -641,7 +670,7 @@ func TestIntegration_CancelPaidOrder(t *testing.T) {
 
 func TestIntegration_ListOrders(t *testing.T) {
 	env := newTestEnv(t)
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 
 	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
@@ -673,7 +702,7 @@ func TestIntegration_ListOrders(t *testing.T) {
 func TestIntegration_OutboxCheckoutRelay(t *testing.T) {
 	env := newOutboxTestEnv(t)
 
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 	eventCh := make(chan []byte, 1)
 	env.subscribeJS(t, orderCreatedSubject, "test-outbox-order-created", func(_ context.Context, msg *nats.Msg) error {
 		payload := make([]byte, len(msg.Data))
@@ -817,8 +846,7 @@ func newOutboxTestEnv(t *testing.T) *testEnv {
 	})
 
 	checkoutWriter := checkoutpostgres.NewWriter(pool)
-	outboxRepo := outboxpostgres.NewRepository(pool)
-	relay := outboxrelay.New(outboxRepo, natsClient, outboxrelay.Config{
+	relay := outbox.NewRelay(outboxpg.New(pool), outboxnats.New(natsClient), outbox.RelayConfig{
 		PollInterval: 100 * time.Millisecond,
 		BatchSize:    50,
 	})
@@ -831,8 +859,15 @@ func newOutboxTestEnv(t *testing.T) *testEnv {
 		cartRepo,
 		orderRepo,
 		events,
+		app.NewNoopPaymentClient(),
+		app.NewNoopOrderMetrics(),
 		checkoutWriter,
 		app.OrderCreatedSubject(orderCreatedSubject),
+		app.OrderEventSubjects{
+			ConfirmOrder:   confirmOrderSubject,
+			OrderFinalized: orderFinalizedSubject,
+			OrderCancelled: orderCancelledSubject,
+		},
 	)
 	consumer := natsconsumer.NewConsumer(natsClient, natsconsumer.Subjects{
 		ItemsReserved:     itemsReservedSubject,
@@ -886,6 +921,53 @@ func (env *testEnv) waitForReservedCart(t *testing.T) {
 		}
 		return cart.AllItemsReserved()
 	}, 5*time.Second, 50*time.Millisecond)
+}
+
+func TestIntegration_PayOrder_PaymentUnavailable(t *testing.T) {
+	deadPayment, err := paymentgrpc.NewPaymentClient(context.Background(), paymentgrpc.ClientConfig{
+		Addr:       "127.0.0.1:1",
+		Insecure:   true,
+		RPCTimeout: 500 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = deadPayment.Close() })
+
+	env := newTestEnv(t, deadPayment)
+	productID := uuid.NewV7().String()
+
+	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
+		`{"product_id":"%s","quantity":1,"unit_price":100}`,
+		productID,
+	))
+	require.Equal(t, http.StatusCreated, addResp.StatusCode)
+	_ = addResp.Body.Close()
+	env.waitForReservedCart(t)
+
+	checkoutResp := env.doJSON(t, http.MethodPost, "/orders", env.token, `{"delivery_address":"Moscow"}`)
+	require.Equal(t, http.StatusCreated, checkoutResp.StatusCode)
+	var order struct {
+		OrderID string `json:"order_id"`
+		Status  string `json:"status"`
+	}
+	require.NoError(t, json.NewDecoder(checkoutResp.Body).Decode(&order))
+	_ = checkoutResp.Body.Close()
+	assert.Equal(t, "RESERVED", order.Status)
+
+	start := time.Now()
+	payResp := env.doJSON(t, http.MethodPost, "/orders/"+order.OrderID+"/pay", env.token, "")
+	elapsed := time.Since(start)
+	t.Cleanup(func() { _ = payResp.Body.Close() })
+	assert.Equal(t, http.StatusServiceUnavailable, payResp.StatusCode)
+	assert.Less(t, elapsed, 2*time.Second)
+
+	var current struct {
+		Status string `json:"status"`
+	}
+	getResp := env.doJSON(t, http.MethodGet, "/orders/"+order.OrderID, env.token, "")
+	require.Equal(t, http.StatusOK, getResp.StatusCode)
+	require.NoError(t, json.NewDecoder(getResp.Body).Decode(&current))
+	_ = getResp.Body.Close()
+	assert.Equal(t, "RESERVED", current.Status)
 }
 
 func (env *testEnv) doJSON(t *testing.T, method, path, token, body string) *http.Response {

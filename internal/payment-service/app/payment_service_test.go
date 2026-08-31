@@ -72,6 +72,15 @@ func (m *mockTxRepo) Get(_ context.Context, id domain.TransactionID) (*domain.Tr
 	return tx, nil
 }
 
+func (m *mockTxRepo) GetByOrderAndType(_ context.Context, orderID domain.OrderID, txType domain.TransactionType) (*domain.Transaction, error) {
+	for _, tx := range m.transactions {
+		if tx.OrderID == orderID && tx.Type == txType {
+			return tx, nil
+		}
+	}
+	return nil, domain.ErrTransactionNotFound
+}
+
 func (m *mockTxRepo) GetRefundForOriginal(_ context.Context, originalID domain.TransactionID) (*domain.Transaction, error) {
 	for _, tx := range m.transactions {
 		if tx.OriginalTransactionID != nil && *tx.OriginalTransactionID == originalID {
@@ -222,11 +231,29 @@ func TestRefund_Idempotency(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, domain.TransactionStatusSucceeded, refundResult.Status)
 
-	// Second refund with same original_transaction_id - should fail (already refunded)
 	refundResult2, err := svc.Refund(context.Background(), "order-6", "user-1", 10000, chargeResult.TransactionID)
 	require.NoError(t, err)
-	assert.Equal(t, domain.TransactionStatusFailed, refundResult2.Status)
-	assert.Equal(t, "transaction has already been refunded", refundResult2.Message)
+	assert.Equal(t, refundResult.TransactionID, refundResult2.TransactionID)
+	assert.Equal(t, domain.TransactionStatusSucceeded, refundResult2.Status)
+}
+
+func TestCharge_Idempotency(t *testing.T) {
+	accounts := newMockAccountRepo()
+	txs := newMockTxRepo()
+	events := newMockEventPublisher()
+	svc := NewPaymentService(accounts, txs, events)
+
+	first, err := svc.Charge(context.Background(), "order-7", "user-1", 10000)
+	require.NoError(t, err)
+	require.Equal(t, domain.TransactionStatusSucceeded, first.Status)
+
+	second, err := svc.Charge(context.Background(), "order-7", "user-1", 10000)
+	require.NoError(t, err)
+	assert.Equal(t, first.TransactionID, second.TransactionID)
+
+	acc, err := accounts.Get(context.Background(), "user-1")
+	require.NoError(t, err)
+	assert.Equal(t, int64(90000), acc.Balance)
 }
 
 func TestRefund_InvalidOriginalTransaction(t *testing.T) {

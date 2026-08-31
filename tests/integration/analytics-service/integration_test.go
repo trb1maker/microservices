@@ -11,8 +11,8 @@ import (
 	"os"
 	"testing"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/minio/minio-go/v7"
@@ -83,8 +83,8 @@ func TestIntegration_OrderFinalizedFlow(t *testing.T) {
 	require.NoError(t, analyticsConsumer.Start(consumerCtx))
 	t.Cleanup(analyticsConsumer.Close)
 
-	orderID := uuid.New().String()
-	userID := uuid.New().String()
+	orderID := uuid.NewV7().String()
+	userID := uuid.NewV7().String()
 	finalizedAt := time.Now().UTC().Format(time.RFC3339)
 	event := app.OrderFinalized{
 		OrderID:         orderID,

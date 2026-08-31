@@ -1,64 +1,15 @@
 package app
 
-type OrderCreated struct {
-	OrderID    string `json:"order_id"`
-	UserID     string `json:"user_id"`
-	TotalPrice int64  `json:"total_price"`
-}
+import "github.com/trb1maker/microservices/internal/platform/events"
 
-type ReserveItems struct {
-	UserID    string `json:"user_id"`
-	ProductID string `json:"product_id"`
-	Quantity  int    `json:"quantity"`
-}
-
-type ConfirmOrder struct {
-	OrderID   string `json:"order_id"`
-	UserID    string `json:"user_id"`
-	ProductID string `json:"product_id"`
-	Quantity  int    `json:"quantity"`
-}
-
-type ReleaseReservation struct {
-	UserID    string `json:"user_id"`
-	OrderID   string `json:"order_id"`
-	ProductID string `json:"product_id"`
-	Quantity  int    `json:"quantity"`
-}
-
-type OrderFinalized struct {
-	OrderID         string `json:"order_id"`
-	UserID          string `json:"user_id"`
-	TotalAmount     int64  `json:"total_amount"`
-	Status          string `json:"status"`
-	FinalizedAt     string `json:"finalized_at"`
-	DeliveryAddress string `json:"delivery_address"`
-}
-
-type OrderCancelled struct {
-	OrderID string `json:"order_id"`
-	UserID  string `json:"user_id"`
-}
-
-type ItemsReserved struct {
-	OrderID   string `json:"order_id"`
-	UserID    string `json:"user_id"`
-	ProductID string `json:"product_id"`
-	Quantity  int    `json:"quantity"`
-	Timestamp string `json:"timestamp"`
-}
-
-type ReservationFailed struct {
-	OrderID   string `json:"order_id"`
-	UserID    string `json:"user_id"`
-	ProductID string `json:"product_id"`
-	Quantity  int    `json:"quantity"`
-	Reason    string `json:"reason"`
-	Timestamp string `json:"timestamp"`
-}
-
-type OrderConfirmed struct {
-	OrderID   string `json:"order_id"`
-	UserID    string `json:"user_id"`
-	Timestamp string `json:"timestamp"`
-}
+type (
+	OrderCreated       = events.OrderCreated
+	ReserveItems       = events.ReserveItems
+	ConfirmOrder       = events.ConfirmOrder
+	ReleaseReservation = events.ReleaseReservation
+	OrderFinalized     = events.OrderFinalized
+	OrderCancelled     = events.OrderCancelled
+	ItemsReserved      = events.ItemsReserved
+	ReservationFailed  = events.ReservationFailed
+	OrderConfirmed     = events.OrderConfirmed
+)

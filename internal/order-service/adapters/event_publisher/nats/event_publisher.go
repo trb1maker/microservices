@@ -2,21 +2,17 @@ package nats
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/trb1maker/microservices/internal/order-service/app"
 
 	"github.com/nats-io/nats.go"
 	"github.com/trb1maker/microservices/internal/platform/natsx"
-	"github.com/trb1maker/microservices/internal/platform/otel/natsprop"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
-
-const headerOrderID = "X-Order-ID"
 
 var tracer = otel.Tracer("order-service/nats")
 
@@ -75,25 +71,13 @@ func (p *Publisher) publishJSON(ctx context.Context, subject string, event any, 
 		attribute.String("messaging.destination", subject),
 	)
 
-	payload, err := json.Marshal(event)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-
-		return fmt.Errorf("marshal event: %w", err)
-	}
-
-	msg := &nats.Msg{Subject: subject, Data: payload}
+	headers := nats.Header{}
 	if orderID != "" {
-		msg.Header = nats.Header{}
-		msg.Header.Set(headerOrderID, orderID)
+		headers.Set(natsx.HeaderOrderID, orderID)
 	}
-	natsprop.Inject(ctx, msg)
-
-	if err := p.client.PublishMsg(ctx, msg); err != nil {
+	if err := p.client.PublishJSON(ctx, subject, event, headers); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-
 		return fmt.Errorf("publish message: %w", err)
 	}
 

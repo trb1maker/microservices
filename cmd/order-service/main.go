@@ -20,13 +20,16 @@ import (
 	httpadapter "github.com/trb1maker/microservices/internal/order-service/adapters/http"
 	ordermemory "github.com/trb1maker/microservices/internal/order-service/adapters/order_repository/memory"
 	orderpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/order_repository/postgres"
-	outboxrelay "github.com/trb1maker/microservices/internal/order-service/adapters/outbox_relay"
-	outboxpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/outbox_repository/postgres"
 	paymentgrpc "github.com/trb1maker/microservices/internal/order-service/adapters/payment/grpc"
 	userpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/user_repository/postgres"
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/order-service/config"
 	"github.com/trb1maker/microservices/internal/order-service/migrations"
+	"github.com/trb1maker/microservices/internal/platform/inbox"
+	inboxpg "github.com/trb1maker/microservices/internal/platform/inbox/pgstore"
+	"github.com/trb1maker/microservices/internal/platform/outbox"
+	outboxnats "github.com/trb1maker/microservices/internal/platform/outbox/natspub"
+	outboxpg "github.com/trb1maker/microservices/internal/platform/outbox/pgstore"
 
 	"github.com/trb1maker/microservices/internal/platform/health"
 	"github.com/trb1maker/microservices/internal/platform/logging"
@@ -311,6 +314,7 @@ func buildDependencies(
 		KeyFile:    cfg.NATSTLSKeyFile,
 		CAFile:     cfg.NATSTLSCAFile,
 		ServerName: "payment-service",
+		RPCTimeout: cfg.PaymentRPCTimeout,
 	})
 	if err != nil {
 		natsConn.Close()
@@ -330,10 +334,14 @@ func buildDependencies(
 		app.NewNoopOrderMetrics(),
 		checkoutWriter,
 		app.OrderCreatedSubject(cfg.OrderCreatedSubject),
+		app.OrderEventSubjects{
+			ConfirmOrder:   cfg.ConfirmOrderSubject,
+			OrderFinalized: cfg.OrderFinalizedSubject,
+			OrderCancelled: cfg.OrderCancelledSubject,
+		},
 	)
 
-	outboxRepo := outboxpostgres.NewRepository(pool)
-	relay := outboxrelay.New(outboxRepo, natsClient, outboxrelay.Config{
+	relay := outbox.NewRelay(outboxpg.New(pool), outboxnats.New(natsClient), outbox.RelayConfig{
 		PollInterval: cfg.OutboxPollInterval,
 		BatchSize:    cfg.OutboxBatchSize,
 	})
@@ -349,6 +357,7 @@ func buildDependencies(
 		ReservationFailed: cfg.ReservationFailedSubject,
 		OrderConfirmed:    cfg.OrderConfirmedSubject,
 	}, cartService, orderService)
+	consumer.SetInbox(inbox.ForConsumer(inboxpg.New(pool), "order-saga"))
 	if err := consumer.Start(ctx); err != nil {
 		relayCancel()
 		_ = paymentClient.Close()

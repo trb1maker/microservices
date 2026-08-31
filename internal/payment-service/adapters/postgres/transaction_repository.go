@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/trb1maker/microservices/internal/payment-service/domain"
 )
@@ -43,10 +44,23 @@ func (r *TransactionRepository) Create(ctx context.Context, tx *domain.Transacti
 		tx.FailureReason,
 	)
 	if err != nil {
+		if isUniqueViolation(err) {
+			existing, getErr := r.GetByOrderAndType(ctx, tx.OrderID, tx.Type)
+			if getErr != nil {
+				return fmt.Errorf("insert transaction: %w", err)
+			}
+			*tx = *existing
+			return domain.ErrDuplicateTransaction
+		}
 		return fmt.Errorf("insert transaction: %w", err)
 	}
 
 	return nil
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // Get retrieves a transaction by ID.
@@ -81,6 +95,16 @@ func (r *TransactionRepository) Get(ctx context.Context, id domain.TransactionID
 	}
 
 	return &tx, nil
+}
+
+func (r *TransactionRepository) GetByOrderAndType(ctx context.Context, orderID domain.OrderID, txType domain.TransactionType) (*domain.Transaction, error) {
+	query := `
+		SELECT id, order_id, user_id, type, amount, status, original_transaction_id, failure_reason
+		FROM transactions WHERE order_id = $1 AND type = $2
+		ORDER BY created_at DESC
+		LIMIT 1`
+
+	return scanTransaction(r.pool.QueryRow(ctx, query, string(orderID), string(txType)))
 }
 
 // GetRefundForOriginal returns a refund transaction for the given original charge transaction.
@@ -128,4 +152,30 @@ func (r *TransactionRepository) UpdateStatus(ctx context.Context, id domain.Tran
 	}
 
 	return nil
+}
+
+func scanTransaction(row interface{ Scan(dest ...any) error }) (*domain.Transaction, error) {
+	var tx domain.Transaction
+	var origTxID *string
+	err := row.Scan(
+		(*string)(&tx.ID),
+		(*string)(&tx.OrderID),
+		(*string)(&tx.UserID),
+		(*string)(&tx.Type),
+		&tx.Amount,
+		(*string)(&tx.Status),
+		&origTxID,
+		&tx.FailureReason,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrTransactionNotFound
+		}
+		return nil, fmt.Errorf("scan transaction: %w", err)
+	}
+	if origTxID != nil {
+		tid := domain.TransactionID(*origTxID)
+		tx.OriginalTransactionID = &tid
+	}
+	return &tx, nil
 }

@@ -3,11 +3,11 @@ package grpc_test
 import (
 	"testing"
 	"time"
+	"uuid"
 
 	grpcadapter "github.com/trb1maker/microservices/internal/order-service/adapters/grpc"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,18 +15,18 @@ import (
 func TestStatusHub_NotifyOrderStatus(t *testing.T) {
 	t.Parallel()
 
-	orderID := uuid.New()
+	orderID := uuid.NewV7()
 	hub := grpcadapter.NewStatusHub()
 	updates, cancel := hub.Subscribe(orderID.String())
 	defer cancel()
 
 	now := time.Now()
-	item, err := domain.NewOrderItem(domain.ProductID(uuid.New()), 1, 100)
+	item, err := domain.NewOrderItem(domain.ProductID(uuid.NewV7()), 1, 100)
 	require.NoError(t, err)
 
 	order, err := domain.NewOrder(
 		domain.OrderID(orderID),
-		domain.UserID(uuid.New()),
+		domain.UserID(uuid.NewV7()),
 		domain.OrderStatusReserved,
 		domain.PaymentID{},
 		"Moscow",

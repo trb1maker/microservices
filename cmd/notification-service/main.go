@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,8 +20,6 @@ import (
 	"github.com/trb1maker/microservices/internal/platform/metrics"
 	"github.com/trb1maker/microservices/internal/platform/natsx"
 	pkgotel "github.com/trb1maker/microservices/internal/platform/otel"
-
-	"github.com/nats-io/nats.go"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -69,15 +66,14 @@ func run() error {
 
 	metricsServer := metrics.NewServer("notification_service", cfg.MetricsPath)
 	mux := metricsServer.Mux()
-	mux.HandleFunc("GET /health", health.LivenessHandler())
-	mux.HandleFunc("GET /ready", health.ReadinessHandler(health.NewChecker(map[string]health.CheckFunc{
+	health.Mount(mux, health.NewChecker(map[string]health.CheckFunc{
 		"nats": func(context.Context) error {
 			if !nc.Conn().IsConnected() {
 				return errNATSNotConnected
 			}
 			return nil
 		},
-	})))
+	}))
 	if _, err := metricsServer.ListenAndServeWithMux(ctx, cfg.MetricsAddr, mux); err != nil {
 		return fmt.Errorf("start metrics server: %w", err)
 	}
@@ -111,26 +107,15 @@ func run() error {
 }
 
 func initNATS(ctx context.Context, cfg *config.Config) (*natsx.Client, error) {
-	opts := []nats.Option{
-		nats.Name("notification-service"),
-		nats.Secure(&tls.Config{MinVersion: tls.VersionTLS12}),
-	}
-	if cfg.NATSTLSCertFile != "" && cfg.NATSTLSKeyFile != "" {
-		opts = append(opts,
-			nats.ClientCert(cfg.NATSTLSCertFile, cfg.NATSTLSKeyFile),
-			nats.RootCAs(cfg.NATSTLSCAFile),
-		)
-	}
-
-	conn, err := nats.Connect(cfg.NATSURL, opts...)
+	client, err := natsx.Connect(ctx, natsx.ConnectConfig{
+		URL:      cfg.NATSURL,
+		Name:     "notification-service",
+		CertFile: cfg.NATSTLSCertFile,
+		KeyFile:  cfg.NATSTLSKeyFile,
+		CAFile:   cfg.NATSTLSCAFile,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("connect nats: %w", err)
-	}
-
-	client, err := natsx.New(ctx, conn)
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("init jetstream: %w", err)
 	}
 	slog.Info("connected to NATS", slog.String("url", cfg.NATSURL))
 	return client, nil

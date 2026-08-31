@@ -23,6 +23,7 @@ type Consumer struct {
 	subjects Subjects
 	carts    *app.CartService
 	orders   *app.OrderService
+	inbox    natsx.Inbox
 	subs     []*natsx.Subscription
 }
 
@@ -40,6 +41,10 @@ func NewConsumer(
 	}
 }
 
+func (c *Consumer) SetInbox(inbox natsx.Inbox) {
+	c.inbox = inbox
+}
+
 func (c *Consumer) Start(ctx context.Context) error {
 	handlers := []struct {
 		subject string
@@ -53,7 +58,9 @@ func (c *Consumer) Start(ctx context.Context) error {
 
 	for _, item := range handlers {
 		stream := natsx.StreamForSubject(item.subject)
-		sub, err := c.client.ConsumeDurable(ctx, stream, item.durable, item.subject, item.handler, natsx.DurableConsumerConfig{})
+		sub, err := c.client.ConsumeDurable(ctx, stream, item.durable, item.subject, item.handler, natsx.DurableConsumerConfig{
+			Inbox: c.inbox,
+		})
 		if err != nil {
 			c.Close()
 			return fmt.Errorf("subscribe %s: %w", item.subject, err)

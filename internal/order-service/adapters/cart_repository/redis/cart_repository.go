@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"uuid"
 
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 
-	"github.com/google/uuid"
 	goredis "github.com/redis/go-redis/v9"
 )
 

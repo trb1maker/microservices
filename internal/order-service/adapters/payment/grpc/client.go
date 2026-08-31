@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/trb1maker/microservices/internal/order-service/app"
+	"github.com/trb1maker/microservices/internal/platform/breaker"
 	paymentpb "github.com/trb1maker/microservices/internal/platform/proto/payment"
 	"github.com/trb1maker/microservices/internal/platform/tlsutil"
 
+	"github.com/trb1maker/microservices/internal/platform/grpcx"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -26,35 +29,59 @@ type ClientConfig struct {
 	CAFile     string
 	ServerName string
 	Insecure   bool
+	RPCTimeout time.Duration
 }
 
 type PaymentClient struct {
-	conn   *grpc.ClientConn
-	client paymentpb.PaymentServiceClient
+	conn       *grpc.ClientConn
+	client     paymentpb.PaymentServiceClient
+	rpcTimeout time.Duration
+	breaker    *breaker.Breaker
 }
 
 func NewPaymentClient(ctx context.Context, cfg ClientConfig) (*PaymentClient, error) {
 	_ = ctx
 	if cfg.Insecure {
-		return newPaymentClient(cfg.Addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		return newPaymentClient(cfg,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpcx.ClientStatsHandler(),
+		)
 	}
 
 	tlsConfig, err := loadClientTLS(cfg)
 	if err != nil {
 		return nil, err
 	}
-	return newPaymentClient(cfg.Addr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
+	return newPaymentClient(cfg,
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
+		grpcx.ClientStatsHandler(),
+	)
 }
 
-func newPaymentClient(addr string, opts ...grpc.DialOption) (*PaymentClient, error) {
-	conn, err := grpc.NewClient(addr, opts...)
+func newPaymentClient(cfg ClientConfig, opts ...grpc.DialOption) (*PaymentClient, error) {
+	conn, err := grpc.NewClient(cfg.Addr, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("dial payment service: %w", err)
 	}
 	return &PaymentClient{
-		conn:   conn,
-		client: paymentpb.NewPaymentServiceClient(conn),
+		conn:       conn,
+		client:     paymentpb.NewPaymentServiceClient(conn),
+		rpcTimeout: cfg.RPCTimeout,
+		breaker:    breaker.New(breaker.Config{Name: "payment-grpc"}),
 	}, nil
+}
+
+func (c *PaymentClient) rpcContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if c.rpcTimeout <= 0 {
+		return ctx, func() {}
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining < c.rpcTimeout {
+			return ctx, func() {}
+		}
+	}
+	return context.WithTimeout(ctx, c.rpcTimeout)
 }
 
 func (c *PaymentClient) Close() error {
@@ -68,15 +95,42 @@ func (c *PaymentClient) Close() error {
 }
 
 func (c *PaymentClient) Charge(ctx context.Context, orderID, userID string, amount int64) (string, bool, string, error) {
-	resp, err := c.client.Charge(ctx, &paymentpb.ChargeRequest{
-		OrderId: orderID,
-		UserId:  userID,
-		Amount:  amount,
+	rpcCtx, cancel := c.rpcContext(ctx)
+	defer cancel()
+
+	var (
+		resp    *paymentpb.ChargeResponse
+		callErr error
+	)
+	breakerErr := c.breaker.Execute(rpcCtx, func(callCtx context.Context) error {
+		resp, callErr = c.client.Charge(callCtx, &paymentpb.ChargeRequest{
+			OrderId: orderID,
+			UserId:  userID,
+			Amount:  amount,
+		})
+		if callErr != nil {
+			wrapped := wrapRPCError(callErr)
+			if errors.Is(wrapped, app.ErrPaymentUnavailable) {
+				return wrapped
+			}
+			return nil
+		}
+		return nil
 	})
-	if err != nil {
-		return "", false, "", fmt.Errorf("grpc charge: %w", err)
+	if breakerErr != nil {
+		return "", false, "", fmt.Errorf("grpc charge: %w", wrapBreakerError(breakerErr))
+	}
+	if callErr != nil {
+		return "", false, "", fmt.Errorf("grpc charge: %w", wrapRPCError(callErr))
 	}
 	return resp.GetTransactionId(), resp.GetStatus() == paymentpb.PaymentStatus_SUCCEEDED, resp.GetMessage(), nil
+}
+
+func wrapBreakerError(err error) error {
+	if errors.Is(err, breaker.ErrOpen) {
+		return fmt.Errorf("%w: %w", app.ErrPaymentUnavailable, err)
+	}
+	return err
 }
 
 func (c *PaymentClient) CheckHealth(ctx context.Context) error {
@@ -92,14 +146,34 @@ func (c *PaymentClient) CheckHealth(ctx context.Context) error {
 }
 
 func (c *PaymentClient) Refund(ctx context.Context, orderID, userID string, amount int64, originalTransactionID string) (string, bool, string, error) {
-	resp, err := c.client.Refund(ctx, &paymentpb.RefundRequest{
-		OrderId:               orderID,
-		UserId:                userID,
-		Amount:                amount,
-		OriginalTransactionId: originalTransactionID,
+	rpcCtx, cancel := c.rpcContext(ctx)
+	defer cancel()
+
+	var (
+		resp    *paymentpb.RefundResponse
+		callErr error
+	)
+	breakerErr := c.breaker.Execute(rpcCtx, func(callCtx context.Context) error {
+		resp, callErr = c.client.Refund(callCtx, &paymentpb.RefundRequest{
+			OrderId:               orderID,
+			UserId:                userID,
+			Amount:                amount,
+			OriginalTransactionId: originalTransactionID,
+		})
+		if callErr != nil {
+			wrapped := wrapRPCError(callErr)
+			if errors.Is(wrapped, app.ErrPaymentUnavailable) {
+				return wrapped
+			}
+			return nil
+		}
+		return nil
 	})
-	if err != nil {
-		return "", false, "", fmt.Errorf("grpc refund: %w", err)
+	if breakerErr != nil {
+		return "", false, "", fmt.Errorf("grpc refund: %w", wrapBreakerError(breakerErr))
+	}
+	if callErr != nil {
+		return "", false, "", fmt.Errorf("grpc refund: %w", wrapRPCError(callErr))
 	}
 	return resp.GetTransactionId(), resp.GetStatus() == paymentpb.PaymentStatus_SUCCEEDED, resp.GetMessage(), nil
 }
