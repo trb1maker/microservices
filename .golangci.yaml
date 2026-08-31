@@ -141,6 +141,7 @@ linters:
             - github.com/nats-io/nats.go
             - github.com/prometheus/client_golang
             - github.com/redis/go-redis/v9
+            - go.mongodb.org/mongo-driver
             - go.opentelemetry.io
             - golang.org/x/crypto
             - google.golang.org/grpc

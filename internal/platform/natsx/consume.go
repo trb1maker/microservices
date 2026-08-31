@@ -23,10 +23,16 @@ var ErrStreamRequired = errors.New("jetstream stream is required")
 type Handler func(ctx context.Context, msg *nats.Msg) error
 
 // DurableConsumerConfig configures JetStream durable consumer behavior.
+type Inbox interface {
+	Seen(ctx context.Context, eventID string) (bool, error)
+	Mark(ctx context.Context, eventID string) error
+}
+
 type DurableConsumerConfig struct {
 	DeliverPolicy jetstream.DeliverPolicy
 	MaxDeliver    int
 	NakDelay      time.Duration
+	Inbox         Inbox
 }
 
 // Subscription represents an active JetStream durable consumer.
@@ -80,28 +86,7 @@ func (c *Client) ConsumeDurable(
 	}
 
 	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
-		nmsg := &nats.Msg{
-			Subject: msg.Subject(),
-			Data:    msg.Data(),
-			Header:  msg.Headers(),
-			Reply:   msg.Reply(),
-		}
-
-		if err := handler(natsprop.Extract(ctx, nmsg), nmsg); err != nil {
-			slog.Error("jetstream handler failed",
-				slog.String("subject", nmsg.Subject),
-				slog.String("durable", durable),
-				slog.Any("error", err),
-			)
-			if nakErr := msg.NakWithDelay(nakDelay); nakErr != nil {
-				slog.Error("jetstream nak failed", slog.Any("error", nakErr))
-			}
-			return
-		}
-
-		if ackErr := msg.Ack(); ackErr != nil {
-			slog.Error("jetstream ack failed", slog.Any("error", ackErr))
-		}
+		handleDurableMessage(ctx, msg, handler, cfg, durable, nakDelay)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("consume %s: %w", durable, err)
@@ -114,4 +99,95 @@ func (c *Client) ConsumeDurable(
 	)
 
 	return &Subscription{consumeCtx: consumeCtx}, nil
+}
+
+func handleDurableMessage(
+	ctx context.Context,
+	msg jetstream.Msg,
+	handler Handler,
+	cfg DurableConsumerConfig,
+	durable string,
+	nakDelay time.Duration,
+) {
+	nmsg := &nats.Msg{
+		Subject: msg.Subject(),
+		Data:    msg.Data(),
+		Header:  msg.Headers(),
+		Reply:   msg.Reply(),
+	}
+	handlerCtx := natsprop.Extract(ctx, nmsg)
+	eventID := nmsg.Header.Get(HeaderMsgID)
+
+	skip, ok := inboxAlreadySeen(handlerCtx, cfg.Inbox, eventID, durable, msg, nakDelay)
+	if !ok {
+		return
+	}
+	if skip {
+		ackDurable(msg)
+		return
+	}
+
+	if err := handler(handlerCtx, nmsg); err != nil {
+		slog.Error("jetstream handler failed",
+			slog.String("subject", nmsg.Subject),
+			slog.String("durable", durable),
+			slog.Any("error", err),
+		)
+		nakDurable(msg, nakDelay)
+		return
+	}
+
+	if !markInbox(handlerCtx, cfg.Inbox, eventID, durable, msg, nakDelay) {
+		return
+	}
+	ackDurable(msg)
+}
+
+func inboxAlreadySeen(
+	ctx context.Context,
+	box Inbox,
+	eventID, durable string,
+	msg jetstream.Msg,
+	nakDelay time.Duration,
+) (seen bool, ok bool) {
+	if box == nil || eventID == "" {
+		return false, true
+	}
+	seen, err := box.Seen(ctx, eventID)
+	if err != nil {
+		slog.Error("inbox lookup failed", slog.String("durable", durable), slog.Any("error", err))
+		nakDurable(msg, nakDelay)
+		return false, false
+	}
+	return seen, true
+}
+
+func markInbox(
+	ctx context.Context,
+	box Inbox,
+	eventID, durable string,
+	msg jetstream.Msg,
+	nakDelay time.Duration,
+) bool {
+	if box == nil || eventID == "" {
+		return true
+	}
+	if err := box.Mark(ctx, eventID); err != nil {
+		slog.Error("inbox mark failed", slog.String("durable", durable), slog.Any("error", err))
+		nakDurable(msg, nakDelay)
+		return false
+	}
+	return true
+}
+
+func ackDurable(msg jetstream.Msg) {
+	if err := msg.Ack(); err != nil {
+		slog.Error("jetstream ack failed", slog.Any("error", err))
+	}
+}
+
+func nakDurable(msg jetstream.Msg, delay time.Duration) {
+	if err := msg.NakWithDelay(delay); err != nil {
+		slog.Error("jetstream nak failed", slog.Any("error", err))
+	}
 }

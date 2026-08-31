@@ -9,6 +9,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
+	"github.com/trb1maker/microservices/internal/platform/inbox"
+	inboxmongo "github.com/trb1maker/microservices/internal/platform/inbox/mongostore"
 	"github.com/trb1maker/microservices/internal/platform/natsx"
 	mongoadapter "github.com/trb1maker/microservices/internal/store-service/adapters/mongodb"
 	natsadapter "github.com/trb1maker/microservices/internal/store-service/adapters/nats"
@@ -48,6 +50,9 @@ func SetupStore(
 	subjects Subjects,
 	opts Options,
 ) (*Worker, error) {
+	if err := mongoadapter.EnsureStoreIndexes(ctx, db); err != nil {
+		return nil, fmt.Errorf("ensure store indexes: %w", err)
+	}
 	if err := mongoadapter.SeedProducts(ctx, db); err != nil {
 		return nil, fmt.Errorf("seed products: %w", err)
 	}
@@ -64,8 +69,9 @@ func SetupStore(
 		subjects.OrderConfirmed,
 		subjects.ReservationReleased,
 	)
-	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
+	storeSvc := app.NewStoreServiceWithReservations(productRepo, stockRepo, eventPub, nil, mongoadapter.NewReservationStore(db))
 	worker := natsadapter.NewWorker(storeSvc)
+	worker.SetInbox(inbox.ForConsumer(inboxmongo.New(db), "store-service"))
 
 	w := &Worker{worker: worker}
 	if opts.GateConfirm {
@@ -103,7 +109,9 @@ func (w *Worker) subscribe(ctx context.Context, client *natsx.Client, subjects S
 
 	for _, item := range handlers {
 		stream := natsx.StreamForSubject(item.subject)
-		if _, err := client.ConsumeDurable(context.WithoutCancel(ctx), stream, item.durable, item.subject, item.handler, natsx.DurableConsumerConfig{}); err != nil {
+		if _, err := client.ConsumeDurable(context.WithoutCancel(ctx), stream, item.durable, item.subject, item.handler, natsx.DurableConsumerConfig{
+			Inbox: w.worker.Inbox(),
+		}); err != nil {
 			return fmt.Errorf("subscribe %s: %w", item.subject, err)
 		}
 		w.subCount++

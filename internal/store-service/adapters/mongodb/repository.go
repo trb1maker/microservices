@@ -15,11 +15,14 @@ import (
 const (
 	fieldID        = "_id"
 	fieldProductID = "product_id"
+	fieldOrderID   = "order_id"
 	fieldName      = "name"
 	fieldSKU       = "sku"
 	fieldPrice     = "price"
 	fieldAvailable = "available"
 	fieldReserved  = "reserved"
+	fieldOperation = "operation"
+	opSetOnInsert  = "$setOnInsert"
 )
 
 // ProductRepository implements app.ProductRepository using MongoDB.
@@ -141,7 +144,7 @@ func SeedProducts(ctx context.Context, db *mongo.Database) error {
 		_, err := productColl.UpdateOne(
 			ctx,
 			bson.M{fieldID: doc[fieldID]},
-			bson.M{"$setOnInsert": p},
+			bson.M{opSetOnInsert: p},
 			options.Update().SetUpsert(true),
 		)
 		if err != nil {
@@ -166,7 +169,7 @@ func SeedProducts(ctx context.Context, db *mongo.Database) error {
 		_, err := stockColl.UpdateOne(
 			ctx,
 			bson.M{fieldProductID: doc[fieldProductID]},
-			bson.M{"$setOnInsert": s},
+			bson.M{opSetOnInsert: s},
 			options.Update().SetUpsert(true),
 		)
 		if err != nil {
