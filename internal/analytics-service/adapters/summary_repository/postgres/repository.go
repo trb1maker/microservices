@@ -26,6 +26,15 @@ func (r *SummaryRepository) Ping(ctx context.Context) error {
 	return nil
 }
 
+func (r *SummaryRepository) IsOrderProcessed(ctx context.Context, orderID string) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM processed_orders WHERE order_id = $1)`, orderID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check processed order: %w", err)
+	}
+	return exists, nil
+}
+
 func (r *SummaryRepository) RecordOrder(ctx context.Context, orderID string, amount int64, finalizedAt time.Time) (bool, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
