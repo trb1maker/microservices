@@ -23,6 +23,8 @@ import (
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 	"github.com/trb1maker/microservices/internal/order-service/migrations"
+	"github.com/trb1maker/microservices/internal/platform/inbox"
+	inboxpg "github.com/trb1maker/microservices/internal/platform/inbox/pgstore"
 	"github.com/trb1maker/microservices/internal/platform/natsx"
 	"github.com/trb1maker/microservices/internal/platform/outbox"
 	outboxnats "github.com/trb1maker/microservices/internal/platform/outbox/natspub"
@@ -133,6 +135,7 @@ func SetupStack(ctx context.Context, cfg Config) (*Stack, error) {
 		ReservationFailed: cfg.Subjects.ReservationFailed,
 		OrderConfirmed:    cfg.Subjects.OrderConfirmed,
 	}, cartService, orderService)
+	consumer.SetInbox(inbox.ForConsumer(inboxpg.New(ordersPool), "order-saga"))
 	if err := consumer.Start(context.WithoutCancel(ctx)); err != nil {
 		relayCancel()
 		_ = paymentClient.Close()

@@ -25,6 +25,8 @@ import (
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/order-service/config"
 	"github.com/trb1maker/microservices/internal/order-service/migrations"
+	"github.com/trb1maker/microservices/internal/platform/inbox"
+	inboxpg "github.com/trb1maker/microservices/internal/platform/inbox/pgstore"
 	"github.com/trb1maker/microservices/internal/platform/outbox"
 	outboxnats "github.com/trb1maker/microservices/internal/platform/outbox/natspub"
 	outboxpg "github.com/trb1maker/microservices/internal/platform/outbox/pgstore"
@@ -349,6 +351,7 @@ func buildDependencies(
 		ReservationFailed: cfg.ReservationFailedSubject,
 		OrderConfirmed:    cfg.OrderConfirmedSubject,
 	}, cartService, orderService)
+	consumer.SetInbox(inbox.ForConsumer(inboxpg.New(pool), "order-saga"))
 	if err := consumer.Start(ctx); err != nil {
 		relayCancel()
 		_ = paymentClient.Close()

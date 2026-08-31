@@ -13,13 +13,22 @@ import (
 
 // Worker listens to JetStream commands and delegates to StoreService.
 type Worker struct {
-	svc  *app.StoreService
-	subs []*natsx.Subscription
+	svc   *app.StoreService
+	inbox natsx.Inbox
+	subs  []*natsx.Subscription
 }
 
 // NewWorker creates a new NATS Worker.
 func NewWorker(svc *app.StoreService) *Worker {
 	return &Worker{svc: svc}
+}
+
+func (w *Worker) SetInbox(inbox natsx.Inbox) {
+	w.inbox = inbox
+}
+
+func (w *Worker) Inbox() natsx.Inbox {
+	return w.inbox
 }
 
 // ReserveItemsMessage is the expected payload for RESERVE_ITEMS.
@@ -38,7 +47,7 @@ func (w *Worker) HandleReserveItems(ctx context.Context, msg *nats.Msg) error {
 	}
 
 	err := w.svc.ReserveItems(ctx, app.ReserveItemsRequest{
-		OrderID:   msg.Header.Get("X-Order-ID"),
+		OrderID:   msg.Header.Get(natsx.HeaderOrderID),
 		UserID:    req.UserID,
 		ProductID: req.ProductID,
 		Quantity:  req.Quantity,
@@ -119,7 +128,9 @@ func (w *Worker) SubscribeAll(ctx context.Context, client *natsx.Client, reserve
 
 	for _, s := range subs {
 		stream := natsx.StreamForSubject(s.subject)
-		sub, err := client.ConsumeDurable(ctx, stream, s.durable, s.subject, s.handler, natsx.DurableConsumerConfig{})
+		sub, err := client.ConsumeDurable(ctx, stream, s.durable, s.subject, s.handler, natsx.DurableConsumerConfig{
+			Inbox: w.inbox,
+		})
 		if err != nil {
 			w.Close()
 			return fmt.Errorf("subscribe to %s: %w", s.subject, err)

@@ -19,6 +19,11 @@ type StockRepository interface {
 	Update(ctx context.Context, stock *domain.Stock) error
 }
 
+type ReservationStore interface {
+	Seen(ctx context.Context, orderID, operation string) (bool, error)
+	Mark(ctx context.Context, orderID, operation string) error
+}
+
 // EventPublisher defines the interface for publishing store events.
 type EventPublisher interface {
 	PublishItemsReserved(ctx context.Context, event ItemsReservedEvent) error

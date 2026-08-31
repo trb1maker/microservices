@@ -25,23 +25,36 @@ const (
 
 // StoreService implements the store business logic.
 type StoreService struct {
-	products ProductRepository
-	stocks   StockRepository
-	events   EventPublisher
-	locker   StockLocker
+	products     ProductRepository
+	stocks       StockRepository
+	events       EventPublisher
+	locker       StockLocker
+	reservations ReservationStore
 }
 
-// NewStoreService creates a new StoreService.
 func NewStoreService(products ProductRepository, stocks StockRepository, events EventPublisher, locker StockLocker) *StoreService {
+	return NewStoreServiceWithReservations(products, stocks, events, locker, NewMemoryReservationStore())
+}
+
+func NewStoreServiceWithReservations(
+	products ProductRepository,
+	stocks StockRepository,
+	events EventPublisher,
+	locker StockLocker,
+	reservations ReservationStore,
+) *StoreService {
 	if locker == nil {
 		locker = NoopStockLocker{}
 	}
-
+	if reservations == nil {
+		reservations = NewMemoryReservationStore()
+	}
 	return &StoreService{
-		products: products,
-		stocks:   stocks,
-		events:   events,
-		locker:   locker,
+		products:     products,
+		stocks:       stocks,
+		events:       events,
+		locker:       locker,
+		reservations: reservations,
 	}
 }
 
@@ -70,6 +83,17 @@ func (s *StoreService) ReserveItems(ctx context.Context, req ReserveItemsRequest
 }
 
 func (s *StoreService) reserveItemsLocked(ctx context.Context, req ReserveItemsRequest) error {
+	if req.OrderID != "" {
+		seen, err := s.reservations.Seen(ctx, req.OrderID, "reserve")
+		if err != nil {
+			return fmt.Errorf("check reserve idempotency: %w", err)
+		}
+		if seen {
+			s.publishItemsReserved(ctx, req.OrderID, req.UserID, req.ProductID, req.Quantity)
+			return nil
+		}
+	}
+
 	// Verify product exists
 	_, err := s.products.Get(ctx, domain.ProductID(req.ProductID))
 	if err != nil {
@@ -102,6 +126,10 @@ func (s *StoreService) reserveItemsLocked(ctx context.Context, req ReserveItemsR
 		return fmt.Errorf("update stock: %w", err)
 	}
 
+	if err := s.markReservation(ctx, req.OrderID, "reserve"); err != nil {
+		return err
+	}
+
 	s.publishItemsReserved(ctx, req.OrderID, req.UserID, req.ProductID, req.Quantity)
 
 	slog.Info("items reserved",
@@ -124,6 +152,13 @@ type ConfirmOrderRequest struct {
 // ConfirmOrder confirms an order (deducts reserved stock).
 func (s *StoreService) ConfirmOrder(ctx context.Context, req ConfirmOrderRequest) error {
 	err := s.withCriticalLock(ctx, req.ProductID, func(ctx context.Context) error {
+		if seen, err := s.alreadyProcessed(ctx, req.OrderID, "confirm"); err != nil {
+			return err
+		} else if seen {
+			s.publishOrderConfirmed(ctx, req.OrderID, req.UserID)
+			return nil
+		}
+
 		stock, err := s.stocks.Get(ctx, domain.ProductID(req.ProductID))
 		if err != nil {
 			return fmt.Errorf("get stock: %w", err)
@@ -137,6 +172,9 @@ func (s *StoreService) ConfirmOrder(ctx context.Context, req ConfirmOrderRequest
 		stock.Confirm(req.Quantity)
 		if err := s.stocks.Update(ctx, stock); err != nil {
 			return fmt.Errorf("update stock: %w", err)
+		}
+		if err := s.markReservation(ctx, req.OrderID, "confirm"); err != nil {
+			return err
 		}
 
 		slog.Info("order confirmed",
@@ -178,6 +216,13 @@ type ReleaseReservationRequest struct {
 // ReleaseReservation releases a reservation (cancels the hold).
 func (s *StoreService) ReleaseReservation(ctx context.Context, req ReleaseReservationRequest) error {
 	err := s.withCriticalLock(ctx, req.ProductID, func(ctx context.Context) error {
+		if seen, err := s.alreadyProcessed(ctx, req.OrderID, "release"); err != nil {
+			return err
+		} else if seen {
+			s.publishReservationReleased(ctx, req.OrderID, req.UserID, req.ProductID, req.Quantity)
+			return nil
+		}
+
 		stock, err := s.stocks.Get(ctx, domain.ProductID(req.ProductID))
 		if err != nil {
 			return fmt.Errorf("get stock: %w", err)
@@ -190,6 +235,9 @@ func (s *StoreService) ReleaseReservation(ctx context.Context, req ReleaseReserv
 		stock.Release(req.Quantity)
 		if err := s.stocks.Update(ctx, stock); err != nil {
 			return fmt.Errorf("update stock: %w", err)
+		}
+		if err := s.markReservation(ctx, req.OrderID, "release"); err != nil {
+			return err
 		}
 
 		s.publishReservationReleased(ctx, req.OrderID, req.UserID, req.ProductID, req.Quantity)
@@ -206,6 +254,27 @@ func (s *StoreService) ReleaseReservation(ctx context.Context, req ReleaseReserv
 		return fmt.Errorf("release reservation lock: %w", err)
 	}
 
+	return nil
+}
+
+func (s *StoreService) alreadyProcessed(ctx context.Context, orderID, operation string) (bool, error) {
+	if orderID == "" {
+		return false, nil
+	}
+	seen, err := s.reservations.Seen(ctx, orderID, operation)
+	if err != nil {
+		return false, fmt.Errorf("check %s idempotency: %w", operation, err)
+	}
+	return seen, nil
+}
+
+func (s *StoreService) markReservation(ctx context.Context, orderID, operation string) error {
+	if orderID == "" {
+		return nil
+	}
+	if err := s.reservations.Mark(ctx, orderID, operation); err != nil {
+		return fmt.Errorf("mark %s idempotency: %w", operation, err)
+	}
 	return nil
 }
 

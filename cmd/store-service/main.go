@@ -21,10 +21,15 @@ import (
 	"github.com/trb1maker/microservices/internal/store-service/config"
 
 	"github.com/trb1maker/microservices/internal/platform/health"
+	"github.com/trb1maker/microservices/internal/platform/inbox"
+	inboxmongo "github.com/trb1maker/microservices/internal/platform/inbox/mongostore"
 	"github.com/trb1maker/microservices/internal/platform/logging"
 	"github.com/trb1maker/microservices/internal/platform/metrics"
 	"github.com/trb1maker/microservices/internal/platform/natsx"
 	pkgotel "github.com/trb1maker/microservices/internal/platform/otel"
+	"github.com/trb1maker/microservices/internal/platform/outbox"
+	outboxmongo "github.com/trb1maker/microservices/internal/platform/outbox/mongostore"
+	outboxnats "github.com/trb1maker/microservices/internal/platform/outbox/natspub"
 )
 
 const (
@@ -92,7 +97,7 @@ func run() error {
 	}
 	defer func() { _ = redisClient.Close() }()
 
-	storeSvc, worker, err := initStoreService(db, natsClient, redisClient, cfg)
+	storeSvc, worker, err := initStoreService(ctx, db, natsClient, redisClient, cfg)
 	if err != nil {
 		return fmt.Errorf("init store service: %w", err)
 	}
@@ -157,6 +162,10 @@ func initMongo(ctx context.Context, cfg *config.Config) (*mongo.Client, *mongo.D
 	slog.Info("connected to MongoDB", slog.String("uri", cfg.MongoDBURI))
 
 	db := client.Database(cfg.MongoDBName)
+	if err := mongodb.EnsureStoreIndexes(ctx, db); err != nil {
+		_ = client.Disconnect(ctx)
+		return nil, nil, fmt.Errorf("ensure store indexes: %w", err)
+	}
 	if err := mongodb.SeedProducts(ctx, db); err != nil {
 		_ = client.Disconnect(ctx)
 		return nil, nil, fmt.Errorf("seed products: %w", err)
@@ -192,25 +201,32 @@ func initRedis(ctx context.Context, cfg *config.Config) (*goredis.Client, error)
 	return client, nil
 }
 
-func initStoreService(db *mongo.Database, client *natsx.Client, redisClient *goredis.Client, cfg *config.Config) (*app.StoreService, *natsadapter.Worker, error) {
+func initStoreService(ctx context.Context, db *mongo.Database, client *natsx.Client, redisClient *goredis.Client, cfg *config.Config) (*app.StoreService, *natsadapter.Worker, error) {
 	productRepo := mongodb.NewProductRepository(db)
 	stockRepo := mongodb.NewStockRepository(db)
-
-	eventPub := natsadapter.NewEventPublisher(
-		client,
+	eventPub := mongodb.NewOutboxPublisher(
+		db,
 		cfg.ItemsReservedSubject,
 		cfg.ReservationFailedSubject,
 		cfg.OrderConfirmedSubject,
 		cfg.ReservationReleasedSubject,
 	)
+	reservations := mongodb.NewReservationStore(db)
 
-	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, redisadapter.NewStockLocker(redisClient, redisadapter.StockLockerConfig{
+	storeSvc := app.NewStoreServiceWithReservations(productRepo, stockRepo, eventPub, redisadapter.NewStockLocker(redisClient, redisadapter.StockLockerConfig{
 		TTL:        cfg.StockLockTTL,
 		RetryCount: cfg.StockLockRetryCount,
 		RetryDelay: cfg.StockLockRetryDelay,
-	}))
+	}), reservations)
 	worker := natsadapter.NewWorker(storeSvc)
-	if err := worker.SubscribeAll(context.Background(), client, cfg.ReserveItemsSubject, cfg.ConfirmOrderSubject, cfg.ReleaseReservationSubject); err != nil {
+	worker.SetInbox(inbox.ForConsumer(inboxmongo.New(db), "store-service"))
+	relay := outbox.NewRelay(outboxmongo.New(db), outboxnats.New(client), outbox.RelayConfig{})
+	go func() {
+		if err := relay.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("store outbox relay stopped", slog.Any("error", err))
+		}
+	}()
+	if err := worker.SubscribeAll(ctx, client, cfg.ReserveItemsSubject, cfg.ConfirmOrderSubject, cfg.ReleaseReservationSubject); err != nil {
 		return nil, nil, fmt.Errorf("subscribe to NATS: %w", err)
 	}
 
