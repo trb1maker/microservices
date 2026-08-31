@@ -110,3 +110,15 @@ tasks:
   sprint6:failover:
     desc: Сценарии отказоустойчивости БД (Sprint 6)
     cmd: bash scripts/sprint6-failover.sh
+
+  sprint7:nats-load:
+    desc: Нагрузка JetStream (Sprint 7)
+    cmd: bash scripts/sprint7-nats-load.sh
+
+  sprint7:nats-failover:
+    desc: Restart NATS и проверка durable consumers (Sprint 7)
+    cmd: bash scripts/sprint7-nats-failover.sh
+
+  sprint7:load:
+    desc: Сквозная нагрузка checkout/pay/receipt (Sprint 7)
+    cmd: bash scripts/sprint7-load.sh
