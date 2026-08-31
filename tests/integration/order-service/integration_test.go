@@ -158,7 +158,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	require.NoError(t, err)
 
 	orderRepo := orderpostgres.NewOrderRepository(pool)
-	cartRepo := cartredis.NewCartRepository(redisClient)
+	cartRepo := cartredis.NewCartRepository(redisClient, 24*time.Hour)
 	userRepo := userpostgres.NewUserRepository(pool)
 	authService := app.NewAuthService(userRepo, testJWTSecret, time.Hour)
 	events := natsadapter.NewPublisher(natsConn, natsadapter.Subjects{
@@ -493,6 +493,22 @@ func TestIntegration_CartUpdatedAtRoundTrip(t *testing.T) {
 	}
 	require.NoError(t, json.NewDecoder(getResp.Body).Decode(&cart))
 	assert.Equal(t, addBody.UpdatedAt, cart.UpdatedAt)
+}
+
+func TestIntegration_CartTTL(t *testing.T) {
+	env := newTestEnv(t)
+
+	productID := uuid.New().String()
+	resp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
+		`{"product_id":"%s","quantity":1,"unit_price":100}`,
+		productID,
+	))
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	_ = resp.Body.Close()
+
+	pttl, err := env.redis.PTTL(context.Background(), "cart:"+env.userID).Result()
+	require.NoError(t, err)
+	assert.Greater(t, pttl, time.Duration(0))
 }
 
 // Store не поднимается: orderConfirmed публикуется в NATS вручную.

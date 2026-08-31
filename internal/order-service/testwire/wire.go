@@ -50,6 +50,8 @@ type Config struct {
 	Subjects    Subjects
 }
 
+const defaultCartTTL = 24 * time.Hour
+
 type Stack struct {
 	Server        *httptest.Server
 	Consumer      *natsconsumer.Consumer
@@ -82,7 +84,7 @@ func SetupStack(ctx context.Context, cfg Config) (*Stack, error) {
 	}
 
 	orderRepo := orderpostgres.NewOrderRepository(ordersPool)
-	cartRepo := cartredis.NewCartRepository(cfg.RedisClient)
+	cartRepo := cartredis.NewCartRepository(cfg.RedisClient, defaultCartTTL)
 	userRepo := userpostgres.NewUserRepository(ordersPool)
 	authService := app.NewAuthService(userRepo, cfg.JWTSecret, time.Hour)
 	events := natsadapter.NewPublisher(cfg.NatsConn, natsadapter.Subjects{

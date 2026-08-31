@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 )
@@ -10,6 +11,7 @@ type Config struct {
 	NATSURL     string `env:"NATS_URL" envDefault:"tls://localhost:4222"`
 	MongoDBURI  string `env:"MONGODB_URI" envDefault:"mongodb://localhost:27017"`
 	MongoDBName string `env:"MONGODB_DB_NAME" envDefault:"store"`
+	RedisAddr   string `env:"REDIS_ADDR" envDefault:"localhost:6379"`
 	LogLevel    string `env:"LOG_LEVEL" envDefault:"info"`
 	LogFormat   string `env:"LOG_FORMAT" envDefault:"json"`
 
@@ -34,6 +36,10 @@ type Config struct {
 	NATSTLSCertFile string `env:"NATS_TLS_CERT_FILE"`
 	NATSTLSKeyFile  string `env:"NATS_TLS_KEY_FILE"`
 	NATSTLSCAFile   string `env:"NATS_TLS_CA_FILE"`
+
+	StockLockTTL        time.Duration `env:"STOCK_LOCK_TTL" envDefault:"5s"`
+	StockLockRetryCount int           `env:"STOCK_LOCK_RETRY_COUNT" envDefault:"20"`
+	StockLockRetryDelay time.Duration `env:"STOCK_LOCK_RETRY_DELAY" envDefault:"50ms"`
 }
 
 func Load() (*Config, error) {

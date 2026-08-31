@@ -1,13 +1,56 @@
 services:
   mongodb:
     image: mongo:8.0
+    command: ["--replSet", "rs0", "--bind_ip_all"]
     ports:
       - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
     healthcheck:
       test: echo 'db.runCommand("ping").ok' | mongosh --quiet
       interval: 5s
       timeout: 5s
       retries: 5
+
+  mongodb-2:
+    image: mongo:8.0
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongodb_2_data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh --quiet
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mongodb-3:
+    image: mongo:8.0
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27019:27017"
+    volumes:
+      - mongodb_3_data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh --quiet
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mongodb-init:
+    image: mongo:8.0
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      mongodb-2:
+        condition: service_healthy
+      mongodb-3:
+        condition: service_healthy
+    volumes:
+      - ./deploy/mongodb/init-replica-set.sh:/init-replica-set.sh:ro
+    entrypoint: ["/bin/sh", "/init-replica-set.sh"]
+    restart: "no"
 
   postgres:
     image: postgres:18.4-alpine
@@ -17,13 +60,50 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - hot_standby=on
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
     volumes:
+      - postgres_data:/var/lib/postgresql/data
       - ./deploy/postgres/init-databases.sql:/docker-entrypoint-initdb.d/01-init-databases.sql:ro
+      - ./deploy/postgres/init-replication.sql:/docker-entrypoint-initdb.d/02-init-replication.sql:ro
+      - ./deploy/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
     healthcheck:
       test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
       interval: 5s
       timeout: 5s
       retries: 5
+
+  postgres-replica:
+    image: postgres:18.4-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PRIMARY_HOST: postgres
+      REPLICATION_USER: replicator
+      REPLICATION_PASSWORD: replicator
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_replica_data:/var/lib/postgresql/data
+      - ./deploy/postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" && psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc "SELECT pg_is_in_recovery()" | grep -q t']
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:8.8-alpine
@@ -97,6 +177,10 @@ services:
       NATS_TLS_KEY_FILE: ${NATS_TLS_KEY_FILE:-/certs/client.key}
       NATS_TLS_CA_FILE: ${NATS_TLS_CA_FILE:-/certs/ca.crt}
       MTLS_SERVICE_CNS: ${MTLS_SERVICE_CNS:-order-service,payment-service}
+      CART_TTL: ${CART_TTL:-24h}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-100}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-1m}
     depends_on:
       postgres:
         condition: service_healthy
@@ -163,6 +247,10 @@ services:
       METRICS_ADDR: ${STORE_METRICS_ADDR:-:9092}
       MONGODB_URI: ${STORE_MONGODB_URI}
       MONGODB_DB_NAME: ${STORE_MONGODB_DB_NAME}
+      REDIS_ADDR: ${REDIS_ADDR}
+      STOCK_LOCK_TTL: ${STOCK_LOCK_TTL:-5s}
+      STOCK_LOCK_RETRY_COUNT: ${STOCK_LOCK_RETRY_COUNT:-20}
+      STOCK_LOCK_RETRY_DELAY: ${STOCK_LOCK_RETRY_DELAY:-50ms}
       LOG_LEVEL: ${LOG_LEVEL}
       LOG_FORMAT: ${LOG_FORMAT}
       OTEL_SERVICE_NAME: ${STORE_OTEL_SERVICE_NAME}
@@ -179,7 +267,9 @@ services:
       NATS_TLS_KEY_FILE: ${NATS_TLS_KEY_FILE:-/certs/client.key}
       NATS_TLS_CA_FILE: ${NATS_TLS_CA_FILE:-/certs/ca.crt}
     depends_on:
-      mongodb:
+      mongodb-init:
+        condition: service_completed_successfully
+      redis:
         condition: service_healthy
       nats:
         condition: service_healthy
@@ -390,3 +480,8 @@ services:
 
 volumes:
   minio-data:
+  mongodb_data:
+  mongodb_2_data:
+  mongodb_3_data:
+  postgres_data:
+  postgres_replica_data:

@@ -28,6 +28,7 @@ import (
 	"github.com/trb1maker/microservices/internal/platform/health"
 	"github.com/trb1maker/microservices/internal/platform/logging"
 	"github.com/trb1maker/microservices/internal/platform/metrics"
+	pkgmiddleware "github.com/trb1maker/microservices/internal/platform/middleware"
 	pkgotel "github.com/trb1maker/microservices/internal/platform/otel"
 	"github.com/trb1maker/microservices/internal/platform/tlsutil"
 
@@ -88,7 +89,7 @@ func run() error {
 
 	startActiveOrdersRefresh(ctx, cfg, appMetrics, deps.orderRepo, logger)
 
-	server, err := newHTTPServer(cfg, deps, appMetrics)
+	server, err := newHTTPServer(cfg, deps, appMetrics, deps.redisClient)
 	if err != nil {
 		return err
 	}
@@ -160,9 +161,10 @@ type dependencies struct {
 	statusHub     *grpcadapter.StatusHub
 	natsConsumer  *natsconsumer.Consumer
 	paymentClient *paymentgrpc.PaymentClient
+	redisClient   *goredis.Client
 }
 
-func newHTTPServer(cfg *config.Config, deps *dependencies, appMetrics *metrics.Metrics) (*http.Server, error) {
+func newHTTPServer(cfg *config.Config, deps *dependencies, appMetrics *metrics.Metrics, redisClient *goredis.Client) (*http.Server, error) {
 	var remoteChecker httpadapter.RemoteHealthChecker
 	if !cfg.UseMemory && deps.paymentClient != nil {
 		remoteChecker = httpadapter.NewHTTPRemoteChecker(cfg.StoreHealthURL, deps.paymentClient)
@@ -184,10 +186,27 @@ func newHTTPServer(cfg *config.Config, deps *dependencies, appMetrics *metrics.M
 		authHandler = httpadapter.NewAppAuthAdapter(deps.authService)
 	}
 
+	var rateLimit *pkgmiddleware.RateLimitConfig
+	if cfg.RateLimitEnabled && redisClient != nil {
+		metricsPath := cfg.MetricsPath
+		if metricsPath == "" {
+			metricsPath = "/metrics"
+		}
+
+		rateLimit = &pkgmiddleware.RateLimitConfig{
+			Client:  redisClient,
+			Limit:   cfg.RateLimitRequests,
+			Window:  cfg.RateLimitWindow,
+			Skip:    pkgmiddleware.SkipRateLimitPaths(metricsPath),
+			OnLimit: appMetrics.RecordRateLimitExceeded,
+		}
+	}
+
 	server := httpadapter.NewServer(httpadapter.ServerConfig{
 		Addr:        cfg.HTTPAddr,
 		ServiceName: cfg.ServiceName,
 		MetricsPath: cfg.MetricsPath,
+		RateLimit:   rateLimit,
 		Auth: &httpadapter.AuthConfig{
 			JWTSecret:  cfg.JWTSecret,
 			ServiceCAs: serviceCAs,
@@ -259,7 +278,7 @@ func buildDependencies(
 	}
 
 	orderRepo := orderpostgres.NewOrderRepository(pool)
-	cartRepo := cartredis.NewCartRepository(redisClient)
+	cartRepo := cartredis.NewCartRepository(redisClient, cfg.CartTTL)
 	userRepo := userpostgres.NewUserRepository(pool)
 	authService := app.NewAuthService(userRepo, cfg.JWTSecret, cfg.JWTTTL)
 	events := natsadapter.NewPublisher(natsConn, natsadapter.Subjects{
@@ -333,6 +352,7 @@ func buildDependencies(
 		statusHub:     statusHub,
 		natsConsumer:  consumer,
 		paymentClient: paymentClient,
+		redisClient:   redisClient,
 	}, cleanup, nil
 }
 

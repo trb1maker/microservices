@@ -14,7 +14,7 @@ type HTTPInstrumenter interface {
 	Instrument(next http.Handler) http.Handler
 }
 
-// ChainWithAuth собирает middleware-цепочку с JWT/mTLS auth.
+// ChainWithAuth собирает middleware-цепочку с JWT/mTLS auth и опциональным rate limit.
 func ChainWithAuth(
 	handler http.Handler,
 	serviceName string,
@@ -25,8 +25,13 @@ func ChainWithAuth(
 	serviceCAs *x509.CertPool,
 	serviceCNs map[string]struct{},
 	metricsPath string,
+	rateLimit *RateLimitConfig,
 ) http.Handler {
 	h := handler
+
+	if rateLimit != nil {
+		h = RateLimit(*rateLimit)(h)
+	}
 
 	if secret != "" || serviceCAs != nil {
 		h = JWTAuth(secret, authSkip, serviceCAs, serviceCNs)(h)

@@ -23,6 +23,7 @@ type Metrics struct {
 	HTTPRequestsInFlight prometheus.Gauge
 	OrdersCreatedTotal   prometheus.Counter
 	OrdersActive         prometheus.Gauge
+	RateLimitExceeded    prometheus.Counter
 }
 
 func New(metricsPath string) *Metrics {
@@ -61,6 +62,11 @@ func New(metricsPath string) *Metrics {
 			Name:      "orders_active",
 			Help:      "Number of active orders (not confirmed or cancelled).",
 		}),
+		RateLimitExceeded: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "rate_limit_exceeded_total",
+			Help:      "Total number of requests rejected by rate limiter.",
+		}),
 	}
 
 	registry.MustRegister(
@@ -69,6 +75,7 @@ func New(metricsPath string) *Metrics {
 		m.HTTPRequestsInFlight,
 		m.OrdersCreatedTotal,
 		m.OrdersActive,
+		m.RateLimitExceeded,
 	)
 
 	return m
@@ -111,4 +118,8 @@ func (m *Metrics) RecordOrderCreated() {
 
 func (m *Metrics) SetActiveOrders(count int) {
 	m.OrdersActive.Set(float64(count))
+}
+
+func (m *Metrics) RecordRateLimitExceeded() {
+	m.RateLimitExceeded.Inc()
 }
