@@ -5,29 +5,29 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/nats-io/nats.go"
+	"github.com/trb1maker/microservices/internal/platform/natsx"
 	"github.com/trb1maker/microservices/internal/store-service/app"
 )
 
-// EventPublisher publishes store events to NATS.
+// EventPublisher publishes store events to JetStream.
 type EventPublisher struct {
-	conn                    *nats.Conn
+	client                  *natsx.Client
 	itemsReservedSubj       string
 	reservationFailedSubj   string
 	orderConfirmedSubj      string
 	reservationReleasedSubj string
 }
 
-// NewEventPublisher creates a new NATS EventPublisher.
+// NewEventPublisher creates a new JetStream EventPublisher.
 func NewEventPublisher(
-	conn *nats.Conn,
+	client *natsx.Client,
 	itemsReservedSubj,
 	reservationFailedSubj,
 	orderConfirmedSubj,
 	reservationReleasedSubj string,
 ) *EventPublisher {
 	return &EventPublisher{
-		conn:                    conn,
+		client:                  client,
 		itemsReservedSubj:       itemsReservedSubj,
 		reservationFailedSubj:   reservationFailedSubj,
 		orderConfirmedSubj:      orderConfirmedSubj,
@@ -35,28 +35,28 @@ func NewEventPublisher(
 	}
 }
 
-func (p *EventPublisher) PublishItemsReserved(_ context.Context, event app.ItemsReservedEvent) error {
-	return p.publish(p.itemsReservedSubj, event)
+func (p *EventPublisher) PublishItemsReserved(ctx context.Context, event app.ItemsReservedEvent) error {
+	return p.publish(ctx, p.itemsReservedSubj, event)
 }
 
-func (p *EventPublisher) PublishReservationFailed(_ context.Context, event app.ReservationFailedEvent) error {
-	return p.publish(p.reservationFailedSubj, event)
+func (p *EventPublisher) PublishReservationFailed(ctx context.Context, event app.ReservationFailedEvent) error {
+	return p.publish(ctx, p.reservationFailedSubj, event)
 }
 
-func (p *EventPublisher) PublishOrderConfirmed(_ context.Context, event app.OrderConfirmedEvent) error {
-	return p.publish(p.orderConfirmedSubj, event)
+func (p *EventPublisher) PublishOrderConfirmed(ctx context.Context, event app.OrderConfirmedEvent) error {
+	return p.publish(ctx, p.orderConfirmedSubj, event)
 }
 
-func (p *EventPublisher) PublishReservationReleased(_ context.Context, event app.ReservationReleasedEvent) error {
-	return p.publish(p.reservationReleasedSubj, event)
+func (p *EventPublisher) PublishReservationReleased(ctx context.Context, event app.ReservationReleasedEvent) error {
+	return p.publish(ctx, p.reservationReleasedSubj, event)
 }
 
-func (p *EventPublisher) publish(subject string, event any) error {
+func (p *EventPublisher) publish(ctx context.Context, subject string, event any) error {
 	data, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
-	if err := p.conn.Publish(subject, data); err != nil {
+	if err := p.client.Publish(ctx, subject, data); err != nil {
 		return fmt.Errorf("publish to %s: %w", subject, err)
 	}
 	return nil

@@ -25,6 +25,7 @@ import (
 	"github.com/trb1maker/microservices/internal/platform/health"
 	"github.com/trb1maker/microservices/internal/platform/logging"
 	"github.com/trb1maker/microservices/internal/platform/metrics"
+	"github.com/trb1maker/microservices/internal/platform/natsx"
 	pkgotel "github.com/trb1maker/microservices/internal/platform/otel"
 )
 
@@ -71,21 +72,21 @@ func run() error {
 		}
 	}()
 
-	client, db, err := initMongo(ctx, cfg)
+	mongoClient, db, err := initMongo(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("init mongodb: %w", err)
 	}
 	defer func() {
-		if err := client.Disconnect(ctx); err != nil {
+		if err := mongoClient.Disconnect(ctx); err != nil {
 			slog.Error("mongodb disconnect error", slog.Any("error", err))
 		}
 	}()
 
-	nc, err := initNATS(cfg)
+	natsClient, err := initNATS(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("init nats: %w", err)
 	}
-	defer nc.Close()
+	defer natsClient.Conn().Close()
 
 	redisClient, err := initRedis(ctx, cfg)
 	if err != nil {
@@ -93,16 +94,16 @@ func run() error {
 	}
 	defer func() { _ = redisClient.Close() }()
 
-	storeSvc, worker, err := initStoreService(db, nc, redisClient, cfg)
+	storeSvc, worker, err := initStoreService(db, natsClient, redisClient, cfg)
 	if err != nil {
 		return fmt.Errorf("init store service: %w", err)
 	}
 
-	if err := startMetricsServer(ctx, cfg, client, redisClient, nc, worker); err != nil {
+	if err := startMetricsServer(ctx, cfg, mongoClient, redisClient, natsClient, worker); err != nil {
 		return err
 	}
 
-	return serveWorker(ctx, nc, worker, storeSvc, shutdownTracer, logger)
+	return serveWorker(ctx, natsClient, worker, storeSvc, shutdownTracer, logger)
 }
 
 func startMetricsServer(
@@ -110,7 +111,7 @@ func startMetricsServer(
 	cfg *config.Config,
 	mongoClient *mongo.Client,
 	redisClient *goredis.Client,
-	nc *nats.Conn,
+	natsClient *natsx.Client,
 	worker *natsadapter.Worker,
 ) error {
 	metricsServer := metrics.NewServer("store_service", cfg.MetricsPath)
@@ -124,7 +125,7 @@ func startMetricsServer(
 			return redisClient.Ping(ctx).Err()
 		},
 		"nats": func(context.Context) error {
-			if !nc.IsConnected() {
+			if !natsClient.Conn().IsConnected() {
 				return errNATSNotConnected
 			}
 			return nil
@@ -168,7 +169,7 @@ func initMongo(ctx context.Context, cfg *config.Config) (*mongo.Client, *mongo.D
 	return client, db, nil
 }
 
-func initNATS(cfg *config.Config) (*nats.Conn, error) {
+func initNATS(ctx context.Context, cfg *config.Config) (*natsx.Client, error) {
 	natsOpts := []nats.Option{
 		nats.Name("store-service"),
 		nats.Secure(&tls.Config{
@@ -188,8 +189,14 @@ func initNATS(cfg *config.Config) (*nats.Conn, error) {
 		return nil, fmt.Errorf("connect to NATS: %w", err)
 	}
 
+	client, err := natsx.New(ctx, nc)
+	if err != nil {
+		nc.Close()
+		return nil, fmt.Errorf("init jetstream: %w", err)
+	}
+
 	slog.Info("connected to NATS", slog.String("url", cfg.NATSURL))
-	return nc, nil
+	return client, nil
 }
 
 func initRedis(ctx context.Context, cfg *config.Config) (*goredis.Client, error) {
@@ -203,12 +210,12 @@ func initRedis(ctx context.Context, cfg *config.Config) (*goredis.Client, error)
 	return client, nil
 }
 
-func initStoreService(db *mongo.Database, nc *nats.Conn, redisClient *goredis.Client, cfg *config.Config) (*app.StoreService, *natsadapter.Worker, error) {
+func initStoreService(db *mongo.Database, client *natsx.Client, redisClient *goredis.Client, cfg *config.Config) (*app.StoreService, *natsadapter.Worker, error) {
 	productRepo := mongodb.NewProductRepository(db)
 	stockRepo := mongodb.NewStockRepository(db)
 
 	eventPub := natsadapter.NewEventPublisher(
-		nc,
+		client,
 		cfg.ItemsReservedSubject,
 		cfg.ReservationFailedSubject,
 		cfg.OrderConfirmedSubject,
@@ -221,7 +228,7 @@ func initStoreService(db *mongo.Database, nc *nats.Conn, redisClient *goredis.Cl
 		RetryDelay: cfg.StockLockRetryDelay,
 	}))
 	worker := natsadapter.NewWorker(storeSvc)
-	if err := worker.SubscribeAll(nc, cfg.ReserveItemsSubject, cfg.ConfirmOrderSubject, cfg.ReleaseReservationSubject); err != nil {
+	if err := worker.SubscribeAll(context.Background(), client, cfg.ReserveItemsSubject, cfg.ConfirmOrderSubject, cfg.ReleaseReservationSubject); err != nil {
 		return nil, nil, fmt.Errorf("subscribe to NATS: %w", err)
 	}
 
@@ -230,8 +237,8 @@ func initStoreService(db *mongo.Database, nc *nats.Conn, redisClient *goredis.Cl
 
 func serveWorker(
 	ctx context.Context,
-	nc *nats.Conn,
-	_ *natsadapter.Worker,
+	client *natsx.Client,
+	worker *natsadapter.Worker,
 	_ *app.StoreService,
 	shutdownTracer func(context.Context) error,
 	logger *slog.Logger,
@@ -247,7 +254,11 @@ func serveWorker(
 	shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 	defer cancel()
 
-	nc.Close()
+	client.Conn().Close()
+
+	if worker != nil {
+		worker.Close()
+	}
 
 	if err := shutdownTracer(shutdownCtx); err != nil {
 		slog.Error("tracer shutdown error", slog.Any("error", err))

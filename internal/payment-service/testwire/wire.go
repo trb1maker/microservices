@@ -7,12 +7,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/nats-io/nats.go"
 	"github.com/trb1maker/microservices/internal/payment-service/adapters/eventpublisher"
 	grpcadapter "github.com/trb1maker/microservices/internal/payment-service/adapters/grpc"
 	pgadapter "github.com/trb1maker/microservices/internal/payment-service/adapters/postgres"
 	"github.com/trb1maker/microservices/internal/payment-service/app"
 	"github.com/trb1maker/microservices/internal/payment-service/migrations"
+	"github.com/trb1maker/microservices/internal/platform/natsx"
 
 	paymentpb "github.com/trb1maker/microservices/internal/platform/proto/payment"
 
@@ -62,11 +62,11 @@ func SeedAccount(ctx context.Context, pool *pgxpool.Pool, userID string, balance
 	return nil
 }
 
-func StartInsecureGRPC(ctx context.Context, pool *pgxpool.Pool, nc *nats.Conn, subjects Subjects) (*GRPCServer, error) {
+func StartInsecureGRPC(ctx context.Context, pool *pgxpool.Pool, client *natsx.Client, subjects Subjects) (*GRPCServer, error) {
 	accountRepo := pgadapter.NewAccountRepository(pool)
 	txRepo := pgadapter.NewTransactionRepository(pool)
 	eventPub := eventpublisher.NewNATSEventPublisher(
-		nc,
+		client,
 		subjects.PaymentSucceeded,
 		subjects.PaymentFailed,
 		subjects.RefundSucceeded,
