@@ -56,52 +56,103 @@ linters:
   settings:
     depguard:
       rules:
-        deprecated:
+        modules:
+          list-mode: original
           files:
             - $all
+          allow:
+            - $gostd
+            - github.com/trb1maker/microservices
+            - github.com/alicebob/miniredis/v2
+            - github.com/caarlos0/env/v11
+            - github.com/exaring/otelpgx
+            - github.com/golang-jwt/jwt/v5
+            - github.com/jackc/pgx/v5
+            - github.com/minio/minio-go/v7
+            - github.com/nats-io/nats.go
+            - github.com/pressly/goose/v3
+            - github.com/prometheus/client_golang
+            - github.com/redis/go-redis/v9
+            - github.com/stretchr/testify
+            - github.com/swaggo/http-swagger
+            - github.com/swaggo/swag
+            - github.com/testcontainers/testcontainers-go
+            - go.mongodb.org/mongo-driver
+            - go.opentelemetry.io
+            - golang.org/x/crypto
+            - google.golang.org/grpc
+            - google.golang.org/protobuf
           deny:
             - pkg: "log$"
               desc: Use log/slog
             - pkg: "math/rand$"
               desc: Use math/rand/v2
         domain:
+          list-mode: original
           files:
             - "internal/*/domain/**/*.go"
             - "!**/*_test.go"
           allow:
             - $gostd
         application:
+          list-mode: original
           files:
             - "internal/*/app/**/*.go"
             - "!**/*_test.go"
-          deny:
-            - pkg: github.com/trb1maker/microservices/internal/*/adapters/**
-              desc: application layer must not depend on adapters
-            - pkg: github.com/trb1maker/microservices/cmd/**
-              desc: application layer must not depend on the composition root
+          allow:
+            - $gostd
+            - github.com/trb1maker/microservices/internal/analytics-service/domain
+            - github.com/trb1maker/microservices/internal/notification-service/domain
+            - github.com/trb1maker/microservices/internal/order-service/domain
+            - github.com/trb1maker/microservices/internal/payment-service/domain
+            - github.com/trb1maker/microservices/internal/store-service/domain
+            - github.com/trb1maker/microservices/internal/platform
         adapters:
+          list-mode: original
           files:
             - "internal/*/adapters/**/*.go"
             - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/trb1maker/microservices/internal
+            - github.com/trb1maker/microservices/internal/platform
+            - github.com/jackc/pgx/v5
+            - github.com/minio/minio-go/v7
+            - github.com/nats-io/nats.go
+            - github.com/redis/go-redis/v9
+            - github.com/swaggo/http-swagger
+            - go.mongodb.org/mongo-driver
+            - go.opentelemetry.io
+            - google.golang.org/grpc
           deny:
-            - pkg: github.com/trb1maker/microservices/internal/*/app/**
-              desc: adapters layer must not depend on the application layer
-            - pkg: github.com/trb1maker/microservices/cmd/**
-              desc: adapters layer must not depend on the composition root
+            - pkg: github.com/trb1maker/microservices/cmd
+              desc: adapters must not depend on the composition root
         shared:
+          list-mode: original
           files:
             - "internal/platform/**/*.go"
             - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/trb1maker/microservices/internal/platform
+            - github.com/golang-jwt/jwt/v5
+            - github.com/nats-io/nats.go
+            - github.com/prometheus/client_golang
+            - github.com/redis/go-redis/v9
+            - go.opentelemetry.io
+            - golang.org/x/crypto
+            - google.golang.org/grpc
+            - google.golang.org/protobuf
           deny:
-            - pkg: github.com/trb1maker/microservices/internal/analytics-service/**
+            - pkg: github.com/trb1maker/microservices/internal/analytics-service
               desc: shared platform must not depend on services
-            - pkg: github.com/trb1maker/microservices/internal/notification-service/**
+            - pkg: github.com/trb1maker/microservices/internal/notification-service
               desc: shared platform must not depend on services
-            - pkg: github.com/trb1maker/microservices/internal/order-service/**
+            - pkg: github.com/trb1maker/microservices/internal/order-service
               desc: shared platform must not depend on services
-            - pkg: github.com/trb1maker/microservices/internal/payment-service/**
+            - pkg: github.com/trb1maker/microservices/internal/payment-service
               desc: shared platform must not depend on services
-            - pkg: github.com/trb1maker/microservices/internal/store-service/**
+            - pkg: github.com/trb1maker/microservices/internal/store-service
               desc: shared platform must not depend on services
     funlen:
       lines: 80
