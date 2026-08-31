@@ -17,8 +17,8 @@ import (
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 	"github.com/trb1maker/microservices/internal/order-service/migrations"
-
 	"github.com/trb1maker/microservices/internal/platform/health"
+	"github.com/trb1maker/microservices/tests/internal/natstest"
 
 	cartredis "github.com/trb1maker/microservices/internal/order-service/adapters/cart_repository/redis"
 	natsconsumer "github.com/trb1maker/microservices/internal/order-service/adapters/event_consumer/nats"
@@ -123,15 +123,14 @@ func newTestEnv(t *testing.T) *testEnv {
 	t.Cleanup(func() { _ = redisClient.Close() })
 	require.NoError(t, redisClient.Ping(ctx).Err())
 
-	natsContainer, err := tcnats.Run(ctx, "nats:2.14-alpine")
+	natsContainer, err := tcnats.Run(ctx, natstest.Image, natstest.ContainerOptions()...)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = natsContainer.Terminate(context.Background()) })
 
 	natsURL, err := natsContainer.ConnectionString(ctx)
 	require.NoError(t, err)
 
-	natsConn, err := natspkg.Connect(natsURL)
-	require.NoError(t, err)
+	natsConn := natstest.Connect(t, natsURL)
 	t.Cleanup(natsConn.Close)
 
 	_, err = natsConn.Subscribe(reserveItemsSubject, func(msg *natspkg.Msg) {

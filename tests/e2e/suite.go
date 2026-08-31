@@ -32,6 +32,7 @@ import (
 	ordertestwire "github.com/trb1maker/microservices/internal/order-service/testwire"
 	paymenttestwire "github.com/trb1maker/microservices/internal/payment-service/testwire"
 	storetestwire "github.com/trb1maker/microservices/internal/store-service/testwire"
+	"github.com/trb1maker/microservices/tests/internal/natstest"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -227,12 +228,11 @@ func startRedis(t *testing.T, ctx context.Context) (*goredis.Client, testcontain
 
 func startNATS(t *testing.T, ctx context.Context) (*natspkg.Conn, testcontainers.Container) {
 	t.Helper()
-	natsContainer, err := tcnats.Run(ctx, "nats:2.14-alpine")
+	natsContainer, err := tcnats.Run(ctx, natstest.Image, natstest.ContainerOptions()...)
 	require.NoError(t, err)
 	natsURL, err := natsContainer.ConnectionString(ctx)
 	require.NoError(t, err)
-	nc, err := natspkg.Connect(natsURL)
-	require.NoError(t, err)
+	nc := natstest.Connect(t, natsURL)
 	return nc, natsContainer
 }
 

@@ -10,7 +10,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -23,6 +22,7 @@ import (
 	"github.com/trb1maker/microservices/internal/payment-service/app"
 	"github.com/trb1maker/microservices/internal/payment-service/domain"
 	"github.com/trb1maker/microservices/internal/payment-service/migrations"
+	"github.com/trb1maker/microservices/tests/internal/natstest"
 )
 
 func TestPaymentServiceIntegration(t *testing.T) {
@@ -62,9 +62,7 @@ func TestPaymentServiceIntegration(t *testing.T) {
 		t.Logf("close migration db: %v", err)
 	}
 
-	natsContainer, err := natscontainer.Run(ctx,
-		"nats:2.14-alpine",
-	)
+	natsContainer, err := natscontainer.Run(ctx, natstest.Image, natstest.ContainerOptions()...)
 	require.NoError(t, err)
 	defer func() {
 		if err := natsContainer.Terminate(ctx); err != nil {
@@ -75,8 +73,7 @@ func TestPaymentServiceIntegration(t *testing.T) {
 	natsURI, err := natsContainer.ConnectionString(ctx)
 	require.NoError(t, err)
 
-	nc, err := nats.Connect(natsURI)
-	require.NoError(t, err)
+	nc := natstest.Connect(t, natsURI)
 	defer nc.Close()
 
 	_, err = pool.Exec(ctx, `INSERT INTO accounts (user_id, balance, version) VALUES ($1, $2, $3)`,
@@ -259,7 +256,7 @@ func TestDemoUserAccountsMigration(t *testing.T) {
 
 	accountRepo := pgadapter.NewAccountRepository(pool)
 
-	natsContainer, err := natscontainer.Run(ctx, "nats:2.14-alpine")
+	natsContainer, err := natscontainer.Run(ctx, natstest.Image, natstest.ContainerOptions()...)
 	require.NoError(t, err)
 	defer func() {
 		if err := natsContainer.Terminate(ctx); err != nil {
@@ -270,8 +267,7 @@ func TestDemoUserAccountsMigration(t *testing.T) {
 	natsURI, err := natsContainer.ConnectionString(ctx)
 	require.NoError(t, err)
 
-	nc, err := nats.Connect(natsURI)
-	require.NoError(t, err)
+	nc := natstest.Connect(t, natsURI)
 	defer nc.Close()
 
 	txRepo := pgadapter.NewTransactionRepository(pool)

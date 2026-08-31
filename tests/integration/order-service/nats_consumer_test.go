@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcnats "github.com/testcontainers/testcontainers-go/modules/nats"
@@ -17,6 +16,7 @@ import (
 	ordermemory "github.com/trb1maker/microservices/internal/order-service/adapters/order_repository/memory"
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
+	"github.com/trb1maker/microservices/tests/internal/natstest"
 
 	"github.com/google/uuid"
 )
@@ -33,15 +33,14 @@ func TestConsumer_handleReservationFailed_routesToCartAndOrder(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
-	natsContainer, err := tcnats.Run(ctx, "nats:2.14-alpine")
+	natsContainer, err := tcnats.Run(ctx, natstest.Image, natstest.ContainerOptions()...)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = natsContainer.Terminate(context.Background()) })
 
 	natsURL, err := natsContainer.ConnectionString(ctx)
 	require.NoError(t, err)
 
-	nc, err := nats.Connect(natsURL)
-	require.NoError(t, err)
+	nc := natstest.Connect(t, natsURL)
 	t.Cleanup(nc.Close)
 
 	cartRepo := cartmemory.NewCartRepository()

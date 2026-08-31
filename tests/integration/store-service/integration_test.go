@@ -21,6 +21,7 @@ import (
 	mongoadapter "github.com/trb1maker/microservices/internal/store-service/adapters/mongodb"
 	natsadapter "github.com/trb1maker/microservices/internal/store-service/adapters/nats"
 	"github.com/trb1maker/microservices/internal/store-service/app"
+	"github.com/trb1maker/microservices/tests/internal/natstest"
 )
 
 const (
@@ -55,14 +56,13 @@ func setupTestInfra(t *testing.T) (*mongo.Database, *nats.Conn, func()) {
 	require.NoError(t, err)
 
 	// NATS container
-	natsC, err := natscontainer.Run(ctx, "nats:2.14-alpine")
+	natsC, err := natscontainer.Run(ctx, natstest.Image, natstest.ContainerOptions()...)
 	require.NoError(t, err)
 
 	natsURI, err := natsC.ConnectionString(ctx)
 	require.NoError(t, err)
 
-	nc, err := nats.Connect(natsURI, nats.Name("test-store"))
-	require.NoError(t, err)
+	nc := natstest.Connect(t, natsURI, nats.Name("test-store"))
 
 	cleanup := func() {
 		nc.Close()
