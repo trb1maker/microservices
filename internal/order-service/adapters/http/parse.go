@@ -3,11 +3,10 @@ package http
 import (
 	"net/http"
 	"strconv"
+	"uuid"
 
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
-
-	"github.com/google/uuid"
 )
 
 func parseProductID(raw string) (domain.ProductID, error) {

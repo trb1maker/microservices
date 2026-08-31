@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/platform/natsx"
@@ -69,7 +69,7 @@ func (r *Relay) processBatch(ctx context.Context) error {
 		publishedIDs := make([]int64, 0, len(messages))
 		for _, msg := range messages {
 			nmsg := &nats.Msg{Subject: msg.Subject, Data: msg.Payload}
-			if msg.AggregateID != uuid.Nil {
+			if msg.AggregateID != uuid.Nil() {
 				if nmsg.Header == nil {
 					nmsg.Header = nats.Header{}
 				}

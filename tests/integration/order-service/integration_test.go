@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
@@ -30,7 +31,6 @@ import (
 	outboxpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/outbox_repository/postgres"
 	userpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/user_repository/postgres"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/nats-io/nats.go"
@@ -269,7 +269,7 @@ func TestIntegration_Ready(t *testing.T) {
 func TestIntegration_CheckoutHappyPath(t *testing.T) {
 	env := newTestEnv(t)
 
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 
 	eventCh := make(chan []byte, 1)
 	env.subscribeJS(t, orderCreatedSubject, "test-checkout-order-created", func(_ context.Context, msg *nats.Msg) error {
@@ -372,7 +372,7 @@ func TestIntegration_CheckoutEmptyCart(t *testing.T) {
 func TestIntegration_CancelOrder(t *testing.T) {
 	env := newTestEnv(t)
 
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 
 	cancelledCh := make(chan []byte, 1)
 	releaseCh := make(chan []byte, 1)
@@ -451,7 +451,7 @@ func TestIntegration_GetOrder_wrongUser(t *testing.T) {
 	env := newTestEnv(t)
 
 	otherToken := env.login(t, "admin@example.com", "admin123")
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 
 	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
@@ -478,7 +478,7 @@ func TestIntegration_GetOrder_wrongUser(t *testing.T) {
 func TestIntegration_CartUpdatedAtRoundTrip(t *testing.T) {
 	env := newTestEnv(t)
 
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 
 	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
@@ -506,7 +506,7 @@ func TestIntegration_CartUpdatedAtRoundTrip(t *testing.T) {
 func TestIntegration_CartTTL(t *testing.T) {
 	env := newTestEnv(t)
 
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 	resp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
 		productID,
@@ -522,7 +522,7 @@ func TestIntegration_CartTTL(t *testing.T) {
 // Store не поднимается: orderConfirmed публикуется в NATS вручную.
 func TestIntegration_PayToConfirmed_SimulatedStoreConfirm(t *testing.T) {
 	env := newTestEnv(t)
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 
 	finalizedCh := make(chan []byte, 1)
 	env.subscribeJS(t, orderFinalizedSubject, "test-pay-confirmed-finalized", func(_ context.Context, msg *nats.Msg) error {
@@ -605,7 +605,7 @@ func TestIntegration_PayToConfirmed_SimulatedStoreConfirm(t *testing.T) {
 
 func TestIntegration_CancelPaidOrder(t *testing.T) {
 	env := newTestEnv(t)
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 
 	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
@@ -641,7 +641,7 @@ func TestIntegration_CancelPaidOrder(t *testing.T) {
 
 func TestIntegration_ListOrders(t *testing.T) {
 	env := newTestEnv(t)
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 
 	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
@@ -673,7 +673,7 @@ func TestIntegration_ListOrders(t *testing.T) {
 func TestIntegration_OutboxCheckoutRelay(t *testing.T) {
 	env := newOutboxTestEnv(t)
 
-	productID := uuid.New().String()
+	productID := uuid.NewV7().String()
 	eventCh := make(chan []byte, 1)
 	env.subscribeJS(t, orderCreatedSubject, "test-outbox-order-created", func(_ context.Context, msg *nats.Msg) error {
 		payload := make([]byte, len(msg.Data))

@@ -4,8 +4,7 @@ import (
 	"errors"
 	"slices"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 )
 
 var (
@@ -81,7 +80,7 @@ func (c *Cart) TotalPrice() int64 {
 
 func (c *Cart) EnsurePendingOrderID() OrderID {
 	if c.pendingOrderID == (OrderID{}) {
-		c.pendingOrderID = OrderID(uuid.New())
+		c.pendingOrderID = OrderID(uuid.NewV7())
 		c.updatedAt = time.Now()
 	}
 	return c.pendingOrderID

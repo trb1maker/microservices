@@ -3,10 +3,10 @@ package domain_test
 import (
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,15 +14,15 @@ import (
 func TestOrder_Cancel(t *testing.T) {
 	t.Parallel()
 
-	userID := domain.UserID(uuid.New())
-	item := mustOrderItem(t, domain.ProductID(uuid.New()), 1, 100)
+	userID := domain.UserID(uuid.NewV7())
+	item := mustOrderItem(t, domain.ProductID(uuid.NewV7()), 1, 100)
 	now := time.Now()
 
 	t.Run("cancels pending order", func(t *testing.T) {
 		t.Parallel()
 
 		order, err := domain.NewOrder(
-			domain.OrderID(uuid.New()),
+			domain.OrderID(uuid.NewV7()),
 			userID,
 			domain.OrderStatusPending,
 			domain.PaymentID{},
@@ -41,10 +41,10 @@ func TestOrder_Cancel(t *testing.T) {
 		t.Parallel()
 
 		order, err := domain.NewOrder(
-			domain.OrderID(uuid.New()),
+			domain.OrderID(uuid.NewV7()),
 			userID,
 			domain.OrderStatusConfirmed,
-			domain.PaymentID(uuid.New()),
+			domain.PaymentID(uuid.NewV7()),
 			"Moscow",
 			now,
 			now,

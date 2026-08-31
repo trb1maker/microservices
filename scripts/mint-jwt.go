@@ -4,10 +4,9 @@ import (
 	"fmt"
 	"os"
 	"time"
+	"uuid"
 
 	"github.com/trb1maker/microservices/internal/platform/auth"
-
-	"github.com/google/uuid"
 )
 
 func main() {

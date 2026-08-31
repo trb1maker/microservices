@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"uuid"
 
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,9 +52,9 @@ func TestCartService_AddItem_createsCartWhenMissing(t *testing.T) {
 
 	repo := newStubCartRepo()
 	service := NewCartService(repo)
-	userID := domain.UserID(uuid.New())
+	userID := domain.UserID(uuid.NewV7())
 
-	item, err := domain.NewOrderItem(domain.ProductID(uuid.New()), +2, 100)
+	item, err := domain.NewOrderItem(domain.ProductID(uuid.NewV7()), +2, 100)
 	require.NoError(t, err)
 
 	cart, err := service.AddItem(t.Context(), userID, *item)
@@ -69,7 +69,7 @@ func TestCartService_GetCart_createsEmptyCart(t *testing.T) {
 
 	repo := newStubCartRepo()
 	service := NewCartService(repo)
-	userID := domain.UserID(uuid.New())
+	userID := domain.UserID(uuid.NewV7())
 
 	cart, err := service.GetCart(t.Context(), userID)
 	require.NoError(t, err)
@@ -82,8 +82,8 @@ func TestCartService_RemoveItem_success(t *testing.T) {
 
 	repo := newStubCartRepo()
 	service := NewCartService(repo)
-	userID := domain.UserID(uuid.New())
-	productID := domain.ProductID(uuid.New())
+	userID := domain.UserID(uuid.NewV7())
+	productID := domain.ProductID(uuid.NewV7())
 
 	item, err := domain.NewOrderItem(productID, 1, 100)
 	require.NoError(t, err)
@@ -102,9 +102,9 @@ func TestCartService_RemoveItem_notFound(t *testing.T) {
 
 	repo := newStubCartRepo()
 	service := NewCartService(repo)
-	userID := domain.UserID(uuid.New())
+	userID := domain.UserID(uuid.NewV7())
 
-	_, err := service.RemoveItem(t.Context(), userID, domain.ProductID(uuid.New()))
+	_, err := service.RemoveItem(t.Context(), userID, domain.ProductID(uuid.NewV7()))
 	require.ErrorIs(t, err, domain.ErrItemNotFound)
 }
 
@@ -115,7 +115,7 @@ func TestCartService_getOrCreateCart_repoGetError(t *testing.T) {
 	repo.getErr = errRepoUnavailable
 	service := NewCartService(repo)
 
-	_, err := service.GetCart(t.Context(), domain.UserID(uuid.New()))
+	_, err := service.GetCart(t.Context(), domain.UserID(uuid.NewV7()))
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errRepoUnavailable)
 }
@@ -125,8 +125,8 @@ func TestCartService_HandleReservationFailed_clearedCartIsNoOp(t *testing.T) {
 
 	repo := newStubCartRepo()
 	service := NewCartService(repo)
-	userID := domain.UserID(uuid.New())
-	productID := domain.ProductID(uuid.New())
+	userID := domain.UserID(uuid.NewV7())
+	productID := domain.ProductID(uuid.NewV7())
 
 	cart, err := domain.NewCart(userID, mustOrderItem(t, productID))
 	require.NoError(t, err)
@@ -153,9 +153,9 @@ func TestCartService_AddItem_repoSaveError(t *testing.T) {
 	repo := newStubCartRepo()
 	repo.saveErr = errRepoUnavailable
 	service := NewCartService(repo)
-	userID := domain.UserID(uuid.New())
+	userID := domain.UserID(uuid.NewV7())
 
-	item, err := domain.NewOrderItem(domain.ProductID(uuid.New()), 1, 100)
+	item, err := domain.NewOrderItem(domain.ProductID(uuid.NewV7()), 1, 100)
 	require.NoError(t, err)
 
 	_, err = service.AddItem(t.Context(), userID, *item)

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	goredis "github.com/redis/go-redis/v9"
 )
 
@@ -68,7 +68,7 @@ func NewMutex(client *goredis.Client, cfg MutexConfig) *Mutex {
 
 func (m *Mutex) Lock(ctx context.Context, key string) (token string, err error) {
 	fullKey := m.keyPrefix + key
-	token = uuid.NewString()
+	token = uuid.NewV7().String()
 
 	for attempt := 0; attempt <= m.retryCount; attempt++ {
 		if attempt > 0 {

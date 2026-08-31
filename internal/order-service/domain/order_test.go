@@ -3,8 +3,8 @@ package domain
 import (
 	"testing"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -12,10 +12,10 @@ import (
 func TestNewOrder(t *testing.T) {
 	t.Parallel()
 
-	orderID := OrderID(uuid.New())
-	userID := UserID(uuid.New())
-	paymentID := PaymentID(uuid.New())
-	item := mustOrderItem(t, ProductID(uuid.New()), 1, 100)
+	orderID := OrderID(uuid.NewV7())
+	userID := UserID(uuid.NewV7())
+	paymentID := PaymentID(uuid.NewV7())
+	item := mustOrderItem(t, ProductID(uuid.NewV7()), 1, 100)
 	now := time.Now()
 
 	tests := []struct {
@@ -123,16 +123,16 @@ func TestNewOrder(t *testing.T) {
 func TestNewOrder_Items_returnsClone(t *testing.T) {
 	t.Parallel()
 
-	orderID := OrderID(uuid.New())
-	userID := UserID(uuid.New())
-	item := mustOrderItem(t, ProductID(uuid.New()), 1, 100)
+	orderID := OrderID(uuid.NewV7())
+	userID := UserID(uuid.NewV7())
+	item := mustOrderItem(t, ProductID(uuid.NewV7()), 1, 100)
 	now := time.Now()
 
 	order, err := NewOrder(orderID, userID, OrderStatusPending, PaymentID{}, "Moscow", now, now, item)
 	require.NoError(t, err)
 
 	items := order.Items()
-	items[0] = mustOrderItem(t, ProductID(uuid.New()), 99, 1)
+	items[0] = mustOrderItem(t, ProductID(uuid.NewV7()), 99, 1)
 
 	assert.Equal(t, int64(1), order.Items()[0].Quantity())
 }

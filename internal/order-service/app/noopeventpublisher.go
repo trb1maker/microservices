@@ -2,8 +2,8 @@ package app
 
 import (
 	"context"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 )
 
@@ -44,11 +44,11 @@ func NewNoopPaymentClient() *NoopPaymentClient {
 }
 
 func (NoopPaymentClient) Charge(context.Context, string, string, int64) (string, bool, string, error) {
-	return uuid.NewString(), true, "noop payment", nil
+	return uuid.NewV7().String(), true, "noop payment", nil
 }
 
 func (NoopPaymentClient) Refund(context.Context, string, string, int64, string) (string, bool, string, error) {
-	return uuid.NewString(), true, "noop refund", nil
+	return uuid.NewV7().String(), true, "noop refund", nil
 }
 
 type NoopStatusNotifier struct{}

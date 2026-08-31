@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"uuid"
 
 	cartmemory "github.com/trb1maker/microservices/internal/order-service/adapters/cart_repository/memory"
 	httpadapter "github.com/trb1maker/microservices/internal/order-service/adapters/http"
@@ -17,7 +18,6 @@ import (
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/trb1maker/microservices/internal/platform/auth"
@@ -111,8 +111,8 @@ func TestAddCartItem_and_GetCart(t *testing.T) {
 	server := newTestServer(t)
 	t.Cleanup(server.Close)
 
-	userID := uuid.New()
-	productID := uuid.New().String()
+	userID := uuid.NewV7()
+	productID := uuid.NewV7().String()
 
 	req := newRequest(
 		t,
@@ -156,7 +156,7 @@ func TestAddCartItem_requiresAuthorization(t *testing.T) {
 		t,
 		http.MethodPost,
 		server.URL+"/cart/items",
-		`{"product_id":"`+uuid.New().String()+`","quantity":1,"unit_price":100}`,
+		`{"product_id":"`+uuid.NewV7().String()+`","quantity":1,"unit_price":100}`,
 	)
 	req.Header.Set("Content-Type", "application/json")
 
@@ -174,7 +174,7 @@ func TestAddCartItem_invalidJSON(t *testing.T) {
 
 	req := newRequest(t, http.MethodPost, server.URL+"/cart/items", "{")
 	req.Header.Set("Content-Type", "application/json")
-	withBearer(t, req, uuid.New())
+	withBearer(t, req, uuid.NewV7())
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })
@@ -188,8 +188,8 @@ func TestCheckout_createsOrder(t *testing.T) {
 	server := newTestServer(t)
 	t.Cleanup(server.Close)
 
-	userID := uuid.New()
-	productID := uuid.New().String()
+	userID := uuid.NewV7()
+	productID := uuid.NewV7().String()
 
 	addReq := newRequest(
 		t,
@@ -248,7 +248,7 @@ func TestCheckout_requiresDeliveryAddress(t *testing.T) {
 
 	req := newRequest(t, http.MethodPost, server.URL+"/orders", `{"delivery_address":""}`)
 	req.Header.Set("Content-Type", "application/json")
-	withBearer(t, req, uuid.New())
+	withBearer(t, req, uuid.NewV7())
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })
@@ -264,7 +264,7 @@ func TestCheckout_emptyCart(t *testing.T) {
 
 	req := newRequest(t, http.MethodPost, server.URL+"/orders", `{"delivery_address":"Moscow"}`)
 	req.Header.Set("Content-Type", "application/json")
-	withBearer(t, req, uuid.New())
+	withBearer(t, req, uuid.NewV7())
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })
@@ -279,8 +279,8 @@ func TestCancelOrder_confirmedForbidden(t *testing.T) {
 	orderRepo := ordermemory.NewOrderRepository()
 	orderService := app.NewOrderService(cartRepo, orderRepo, app.NewNoopEventPublisher(), app.NewNoopOrderMetrics())
 
-	userID := domain.UserID(uuid.New())
-	item, err := domain.NewOrderItem(domain.ProductID(uuid.New()), 1, 100)
+	userID := domain.UserID(uuid.NewV7())
+	item, err := domain.NewOrderItem(domain.ProductID(uuid.NewV7()), 1, 100)
 	require.NoError(t, err)
 
 	cart, err := domain.NewCart(userID, *item)
@@ -296,7 +296,7 @@ func TestCancelOrder_confirmedForbidden(t *testing.T) {
 		order.OrderID(),
 		order.UserID(),
 		domain.OrderStatusConfirmed,
-		domain.PaymentID(uuid.New()),
+		domain.PaymentID(uuid.NewV7()),
 		order.DeliveryAddress(),
 		order.CreatedAt(),
 		order.UpdatedAt(),
@@ -329,8 +329,8 @@ func TestGetOrder_success(t *testing.T) {
 	server := newTestServer(t)
 	t.Cleanup(server.Close)
 
-	userID := uuid.New()
-	productID := uuid.New().String()
+	userID := uuid.NewV7()
+	productID := uuid.NewV7().String()
 
 	addReq := newRequest(
 		t,
@@ -381,9 +381,9 @@ func TestGetOrder_wrongUser(t *testing.T) {
 	server := newTestServer(t)
 	t.Cleanup(server.Close)
 
-	ownerID := uuid.New()
-	otherID := uuid.New()
-	productID := uuid.New().String()
+	ownerID := uuid.NewV7()
+	otherID := uuid.NewV7()
+	productID := uuid.NewV7().String()
 
 	addReq := newRequest(
 		t,
@@ -426,8 +426,8 @@ func TestCancelOrder_success(t *testing.T) {
 	server := newTestServer(t)
 	t.Cleanup(server.Close)
 
-	userID := uuid.New()
-	productID := uuid.New().String()
+	userID := uuid.NewV7()
+	productID := uuid.NewV7().String()
 
 	addReq := newRequest(
 		t,
@@ -481,8 +481,8 @@ func TestRemoveCartItem_success(t *testing.T) {
 	server := newTestServer(t)
 	t.Cleanup(server.Close)
 
-	userID := uuid.New()
-	productID := uuid.New().String()
+	userID := uuid.NewV7()
+	productID := uuid.NewV7().String()
 
 	addReq := newRequest(
 		t,
@@ -550,7 +550,7 @@ func TestAddCartItem_invalidToken(t *testing.T) {
 		t,
 		http.MethodPost,
 		server.URL+"/cart/items",
-		`{"product_id":"`+uuid.New().String()+`","quantity":1,"unit_price":100}`,
+		`{"product_id":"`+uuid.NewV7().String()+`","quantity":1,"unit_price":100}`,
 	)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer invalid-token")
@@ -568,7 +568,7 @@ func TestGetOrder_invalidOrderID(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	req := newRequest(t, http.MethodGet, server.URL+"/orders/not-a-uuid", "")
-	withBearer(t, req, uuid.New())
+	withBearer(t, req, uuid.NewV7())
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })
@@ -583,7 +583,7 @@ func TestRemoveCartItem_invalidProductID(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	req := newRequest(t, http.MethodDelete, server.URL+"/cart/items/not-a-uuid", "")
-	withBearer(t, req, uuid.New())
+	withBearer(t, req, uuid.NewV7())
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })
@@ -621,7 +621,7 @@ func TestGetCart_internalError(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	req := newRequest(t, http.MethodGet, server.URL+"/cart", "")
-	withBearer(t, req, uuid.New())
+	withBearer(t, req, uuid.NewV7())
 
 	resp := doRequest(t, req)
 	t.Cleanup(func() { _ = resp.Body.Close() })

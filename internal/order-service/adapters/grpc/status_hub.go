@@ -2,8 +2,8 @@ package grpc
 
 import (
 	"sync"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 	orderpb "github.com/trb1maker/microservices/internal/platform/proto/order"
 )

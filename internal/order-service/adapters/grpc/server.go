@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 	orderpb "github.com/trb1maker/microservices/internal/platform/proto/order"
