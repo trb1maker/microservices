@@ -37,6 +37,7 @@ import (
 	pkgotel "github.com/trb1maker/microservices/internal/platform/otel"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -271,6 +272,7 @@ func newGRPCServer(cfg *config.Config, paymentSvc *app.PaymentService, grpcReque
 
 	srv := grpc.NewServer(
 		grpc.Creds(creds),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 			resp, err := handler(ctx, req)
 			statusLabel := "ok"

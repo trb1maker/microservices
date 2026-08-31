@@ -50,3 +50,29 @@ func TestChain_servesBusinessRequestWithTracingDisabled(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
+
+func TestChain_servesBusinessRequestWhenOTLPUnreachable(t *testing.T) {
+	t.Parallel()
+
+	shutdown, err := pkgotel.Init(context.Background(), "test-service", "http://127.0.0.1:1", false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = shutdown(context.Background()) })
+
+	m := metrics.New("/metrics")
+	handler := middleware.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		w.WriteHeader(http.StatusCreated)
+	}), "test-service", m, nil, "/metrics")
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/orders", nil)
+	req.Pattern = "POST /orders"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	metricsRec := httptest.NewRecorder()
+	m.Handler().ServeHTTP(metricsRec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil))
+	assert.Equal(t, http.StatusOK, metricsRec.Code)
+}
