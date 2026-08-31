@@ -514,6 +514,72 @@ func (failingReadinessChecker) Check(context.Context) (bool, map[string]string) 
 	return false, map[string]string{testCheckPostgres: "connection refused"}
 }
 
+type unavailablePaymentClient struct{}
+
+func (unavailablePaymentClient) Charge(context.Context, string, string, int64) (string, bool, string, error) {
+	return "", false, "", app.ErrPaymentUnavailable
+}
+
+func (unavailablePaymentClient) Refund(context.Context, string, string, int64, string) (string, bool, string, error) {
+	return "", false, "", app.ErrPaymentUnavailable
+}
+
+func TestPayOrder_paymentUnavailable(t *testing.T) {
+	t.Parallel()
+
+	cartRepo := cartmemory.NewCartRepository()
+	orderRepo := ordermemory.NewOrderRepository()
+	publisher := &autoReservePublisher{}
+	cartService := app.NewCartService(cartRepo, publisher)
+	publisher.carts = cartService
+	orderService := app.NewOrderService(
+		cartRepo,
+		orderRepo,
+		publisher,
+		unavailablePaymentClient{},
+		app.NewNoopOrderMetrics(),
+	)
+	handler := httpadapter.NewHandler(cartService, orderService, nil, nil)
+	server := httptest.NewServer(httpadapter.NewServer(httpadapter.ServerConfig{
+		Addr: testServerAddr,
+		Auth: &httpadapter.AuthConfig{JWTSecret: testJWTSecret},
+	}, handler, nil, nil).Handler)
+	t.Cleanup(server.Close)
+
+	userID := uuid.NewV7()
+	productID := uuid.NewV7().String()
+
+	addReq := newRequest(
+		t,
+		http.MethodPost,
+		server.URL+"/cart/items",
+		`{"product_id":"`+productID+`","quantity":1,"unit_price":100}`,
+	)
+	addReq.Header.Set("Content-Type", "application/json")
+	withBearer(t, addReq, userID)
+	addResp := doRequest(t, addReq)
+	t.Cleanup(func() { _ = addResp.Body.Close() })
+	require.Equal(t, http.StatusCreated, addResp.StatusCode)
+
+	checkoutReq := newRequest(t, http.MethodPost, server.URL+"/orders", `{"delivery_address":"Moscow"}`)
+	checkoutReq.Header.Set("Content-Type", "application/json")
+	withBearer(t, checkoutReq, userID)
+	checkoutResp := doRequest(t, checkoutReq)
+	t.Cleanup(func() { _ = checkoutResp.Body.Close() })
+	require.Equal(t, http.StatusCreated, checkoutResp.StatusCode)
+
+	var checkoutBody struct {
+		OrderID string `json:"order_id"`
+	}
+	require.NoError(t, json.NewDecoder(checkoutResp.Body).Decode(&checkoutBody))
+
+	payReq := newRequest(t, http.MethodPost, server.URL+"/orders/"+checkoutBody.OrderID+"/pay", "")
+	withBearer(t, payReq, userID)
+	payResp := doRequest(t, payReq)
+	t.Cleanup(func() { _ = payResp.Body.Close() })
+	require.Equal(t, http.StatusServiceUnavailable, payResp.StatusCode)
+}
+
 func TestReady_notReady(t *testing.T) {
 	t.Parallel()
 
