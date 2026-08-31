@@ -6,12 +6,14 @@
 
 ## Описание
 
-Analytics Service — фоновый NATS-воркер. Он слушает финальные события заказов и выполняет две задачи:
+Analytics Service — фоновый NATS-воркер **и HTTP API** (`HTTP_ADDR`, default `:8084`). Он слушает финальные события заказов и выполняет задачи:
 
 1. **Сохранение чека** в MinIO (S3-совместимое хранилище) в формате JSON.
 2. **Обновление агрегированной витрины** в PostgreSQL (ежедневные сводки).
+3. **Индексация для поиска** в PostgreSQL FTS (`receipt_documents`).
+4. **REST:** presigned URL на чек и `GET /receipts/search?q=` (JWT). Подробнее — [ANALYTICS-SERVICE-API.md](ANALYTICS-SERVICE-API.md).
 
-Сервис не имеет собственного API. Данные из MinIO и PostgreSQL используются для дашбордов в Grafana.
+Metrics и probes остаются на `:9094`.
 
 ---
 
@@ -124,6 +126,5 @@ CREATE TABLE IF NOT EXISTS daily_summary (
 - Платежи — Payment Service.
 - Склад — Store Service.
 - Уведомления — Notification Service.
-- Поиск по чекам (только хранение).
 - Дашборды Grafana — настройка в `deploy/observability/grafana/dashboards/`.
 - Долгосрочное хранение и архивация данных.
