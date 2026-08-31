@@ -19,6 +19,7 @@ type AccountRepository interface {
 type TransactionRepository interface {
 	Create(ctx context.Context, tx *domain.Transaction) error
 	Get(ctx context.Context, id domain.TransactionID) (*domain.Transaction, error)
+	GetByOrderAndType(ctx context.Context, orderID domain.OrderID, txType domain.TransactionType) (*domain.Transaction, error)
 	// GetRefundForOriginal returns a refund transaction for the given original charge transaction.
 	GetRefundForOriginal(ctx context.Context, originalID domain.TransactionID) (*domain.Transaction, error)
 	UpdateStatus(ctx context.Context, id domain.TransactionID, status domain.TransactionStatus, failureReason string) error

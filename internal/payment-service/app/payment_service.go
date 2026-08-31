@@ -39,6 +39,12 @@ type ChargeResult struct {
 
 // Charge processes a payment for an order.
 func (s *PaymentService) Charge(ctx context.Context, orderID, userID string, amount int64) (*ChargeResult, error) {
+	if existing, err := s.existingResult(ctx, domain.OrderID(orderID), domain.TransactionTypeCharge); err != nil {
+		return nil, err
+	} else if existing != nil {
+		return existing, nil
+	}
+
 	if amount <= 0 {
 		return &ChargeResult{
 			Status:  domain.TransactionStatusFailed,
@@ -79,6 +85,9 @@ func (s *PaymentService) handleChargeInsufficientFunds(ctx context.Context, orde
 		FailureReason: domain.ErrInsufficientFunds.Error(),
 	}
 	if err := s.transactions.Create(ctx, tx); err != nil {
+		if result, handled, handleErr := s.chargeIfDuplicate(ctx, orderID, err); handled {
+			return result, handleErr
+		}
 		return nil, fmt.Errorf("create failed transaction: %w", err)
 	}
 
@@ -101,6 +110,9 @@ func (s *PaymentService) processCharge(ctx context.Context, orderID, userID stri
 		Status:  domain.TransactionStatusPending,
 	}
 	if err := s.transactions.Create(ctx, tx); err != nil {
+		if result, handled, handleErr := s.chargeIfDuplicate(ctx, orderID, err); handled {
+			return result, handleErr
+		}
 		return nil, fmt.Errorf("create transaction: %w", err)
 	}
 
@@ -174,6 +186,12 @@ type RefundResult struct {
 
 // Refund processes a refund for a previously charged order.
 func (s *PaymentService) Refund(ctx context.Context, orderID, userID string, amount int64, originalTransactionID string) (*RefundResult, error) {
+	if existing, err := s.existingRefund(ctx, domain.OrderID(orderID)); err != nil {
+		return nil, err
+	} else if existing != nil {
+		return existing, nil
+	}
+
 	if amount <= 0 {
 		return &RefundResult{
 			Status:  domain.TransactionStatusFailed,
@@ -240,6 +258,9 @@ func (s *PaymentService) processRefund(ctx context.Context, orderID, userID stri
 		OriginalTransactionID: &origTxID,
 	}
 	if err := s.transactions.Create(ctx, refundTx); err != nil {
+		if result, handled, handleErr := s.refundIfDuplicate(ctx, orderID, err); handled {
+			return result, handleErr
+		}
 		return nil, fmt.Errorf("create refund transaction: %w", err)
 	}
 
@@ -284,6 +305,52 @@ func (s *PaymentService) handleRefundConcurrentModification(ctx context.Context,
 		}, nil
 	}
 	return nil, fmt.Errorf("update balance for refund: %w", err)
+}
+
+func (s *PaymentService) chargeIfDuplicate(ctx context.Context, orderID string, err error) (*ChargeResult, bool, error) {
+	if !errors.Is(err, domain.ErrDuplicateTransaction) {
+		return nil, false, nil
+	}
+	existing, getErr := s.existingResult(ctx, domain.OrderID(orderID), domain.TransactionTypeCharge)
+	return existing, true, getErr
+}
+
+func (s *PaymentService) refundIfDuplicate(ctx context.Context, orderID string, err error) (*RefundResult, bool, error) {
+	if !errors.Is(err, domain.ErrDuplicateTransaction) {
+		return nil, false, nil
+	}
+	existing, getErr := s.existingRefund(ctx, domain.OrderID(orderID))
+	return existing, true, getErr
+}
+
+func (s *PaymentService) existingResult(ctx context.Context, orderID domain.OrderID, txType domain.TransactionType) (*ChargeResult, error) {
+	existing, err := s.transactions.GetByOrderAndType(ctx, orderID, txType)
+	if err != nil {
+		if errors.Is(err, domain.ErrTransactionNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get existing transaction: %w", err)
+	}
+	return &ChargeResult{
+		TransactionID: string(existing.ID),
+		Status:        existing.Status,
+		Message:       existing.FailureReason,
+	}, nil
+}
+
+func (s *PaymentService) existingRefund(ctx context.Context, orderID domain.OrderID) (*RefundResult, error) {
+	existing, err := s.transactions.GetByOrderAndType(ctx, orderID, domain.TransactionTypeRefund)
+	if err != nil {
+		if errors.Is(err, domain.ErrTransactionNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get existing refund: %w", err)
+	}
+	return &RefundResult{
+		TransactionID: string(existing.ID),
+		Status:        existing.Status,
+		Message:       existing.FailureReason,
+	}, nil
 }
 
 func (s *PaymentService) publishPaymentSucceeded(ctx context.Context, orderID, userID string, amount int64, transactionID string) {

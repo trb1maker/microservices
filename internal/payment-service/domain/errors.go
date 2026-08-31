@@ -10,4 +10,5 @@ var (
 	ErrAlreadyRefunded            = errors.New("transaction has already been refunded")
 	ErrInvalidOriginalTransaction = errors.New("original transaction not found or not succeeded")
 	ErrConcurrentModification     = errors.New("concurrent modification detected")
+	ErrDuplicateTransaction       = errors.New("transaction already exists")
 )

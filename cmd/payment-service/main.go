@@ -33,6 +33,9 @@ import (
 	"github.com/trb1maker/microservices/internal/platform/metrics"
 	"github.com/trb1maker/microservices/internal/platform/natsx"
 	pkgotel "github.com/trb1maker/microservices/internal/platform/otel"
+	"github.com/trb1maker/microservices/internal/platform/outbox"
+	outboxnats "github.com/trb1maker/microservices/internal/platform/outbox/natspub"
+	outboxpg "github.com/trb1maker/microservices/internal/platform/outbox/pgstore"
 	"github.com/trb1maker/microservices/internal/platform/tlsutil"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -87,7 +90,13 @@ func run() error {
 	}
 	defer nc.Conn().Close()
 
-	paymentSvc := initPaymentService(pool, nc, cfg)
+	paymentSvc := initPaymentService(pool, cfg)
+	relay := outbox.NewRelay(outboxpg.New(pool), outboxnats.New(nc), outbox.RelayConfig{})
+	go func() {
+		if err := relay.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("outbox relay stopped", slog.Any("error", err))
+		}
+	}()
 
 	metricsServer, grpcRequests, err := initMetrics(ctx, cfg, pool, nc)
 	if err != nil {
@@ -138,12 +147,12 @@ func initNATS(ctx context.Context, cfg *config.Config) (*natsx.Client, error) {
 	return client, nil
 }
 
-func initPaymentService(pool *pgxpool.Pool, client *natsx.Client, cfg *config.Config) *app.PaymentService {
+func initPaymentService(pool *pgxpool.Pool, cfg *config.Config) *app.PaymentService {
 	accountRepo := postgres.NewAccountRepository(pool)
 	transactionRepo := postgres.NewTransactionRepository(pool)
 
-	eventPub := eventpublisher.NewNATSEventPublisher(
-		client,
+	eventPub := eventpublisher.NewOutboxPublisher(
+		pool,
 		cfg.PaymentSucceededSubject,
 		cfg.PaymentFailedSubject,
 		cfg.RefundSucceededSubject,
