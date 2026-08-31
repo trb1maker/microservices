@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -29,7 +28,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/nats-io/nats.go"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -208,8 +206,7 @@ func startHealthServer(
 	addr string,
 ) (*http.Server, error) {
 	mux := metricsServer.Mux()
-	mux.HandleFunc("GET /health", health.LivenessHandler())
-	mux.HandleFunc("GET /ready", health.ReadinessHandler(readiness))
+	health.Mount(mux, readiness)
 	server, err := metricsServer.ListenAndServeWithMux(ctx, addr, mux)
 	if err != nil {
 		return nil, fmt.Errorf("listen metrics: %w", err)
@@ -237,24 +234,15 @@ func initPostgres(
 }
 
 func initNATS(ctx context.Context, cfg *config.Config) (*natsx.Client, error) {
-	opts := []nats.Option{
-		nats.Name("analytics-service"),
-		nats.Secure(&tls.Config{MinVersion: tls.VersionTLS12}),
-	}
-	if cfg.NATSTLSCertFile != "" && cfg.NATSTLSKeyFile != "" {
-		opts = append(opts,
-			nats.ClientCert(cfg.NATSTLSCertFile, cfg.NATSTLSKeyFile),
-			nats.RootCAs(cfg.NATSTLSCAFile),
-		)
-	}
-	conn, err := nats.Connect(cfg.NATSURL, opts...)
+	client, err := natsx.Connect(ctx, natsx.ConnectConfig{
+		URL:      cfg.NATSURL,
+		Name:     "analytics-service",
+		CertFile: cfg.NATSTLSCertFile,
+		KeyFile:  cfg.NATSTLSKeyFile,
+		CAFile:   cfg.NATSTLSCAFile,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("connect nats: %w", err)
-	}
-	client, err := natsx.New(ctx, conn)
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("init jetstream: %w", err)
 	}
 	slog.Info("connected to NATS", slog.String("url", cfg.NATSURL))
 	return client, nil

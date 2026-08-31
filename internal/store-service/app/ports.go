@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 
+	"github.com/trb1maker/microservices/internal/platform/events"
 	"github.com/trb1maker/microservices/internal/store-service/domain"
 )
 
@@ -26,37 +27,9 @@ type EventPublisher interface {
 	PublishReservationReleased(ctx context.Context, event ReservationReleasedEvent) error
 }
 
-// ItemsReservedEvent is published after successful reservation.
-type ItemsReservedEvent struct {
-	OrderID   string `json:"order_id"`
-	UserID    string `json:"user_id"`
-	ProductID string `json:"product_id"`
-	Quantity  int    `json:"quantity"`
-	Timestamp string `json:"timestamp"`
-}
-
-// ReservationFailedEvent is published when reservation fails.
-type ReservationFailedEvent struct {
-	OrderID   string `json:"order_id"`
-	UserID    string `json:"user_id"`
-	ProductID string `json:"product_id"`
-	Quantity  int    `json:"quantity"`
-	Reason    string `json:"reason"`
-	Timestamp string `json:"timestamp"`
-}
-
-// OrderConfirmedEvent is published after successful order confirmation.
-type OrderConfirmedEvent struct {
-	OrderID   string `json:"order_id"`
-	UserID    string `json:"user_id"`
-	Timestamp string `json:"timestamp"`
-}
-
-// ReservationReleasedEvent is published after reservation is released.
-type ReservationReleasedEvent struct {
-	OrderID   string `json:"order_id"`
-	UserID    string `json:"user_id"`
-	ProductID string `json:"product_id"`
-	Quantity  int    `json:"quantity"`
-	Timestamp string `json:"timestamp"`
-}
+type (
+	ItemsReservedEvent       = events.ItemsReserved
+	ReservationFailedEvent   = events.ReservationFailed
+	OrderConfirmedEvent      = events.OrderConfirmed
+	ReservationReleasedEvent = events.ReservationReleased
+)

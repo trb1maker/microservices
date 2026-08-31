@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,7 +13,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/nats-io/nats.go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	grpchealth "google.golang.org/grpc/health"
@@ -30,21 +27,20 @@ import (
 	"github.com/trb1maker/microservices/internal/payment-service/migrations"
 	paymentpb "github.com/trb1maker/microservices/internal/platform/proto/payment"
 
+	"github.com/trb1maker/microservices/internal/platform/grpcx"
 	"github.com/trb1maker/microservices/internal/platform/health"
 	"github.com/trb1maker/microservices/internal/platform/logging"
 	"github.com/trb1maker/microservices/internal/platform/metrics"
 	"github.com/trb1maker/microservices/internal/platform/natsx"
 	pkgotel "github.com/trb1maker/microservices/internal/platform/otel"
+	"github.com/trb1maker/microservices/internal/platform/tlsutil"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 )
 
 const shutdownTimeout = 10 * time.Second
 
 var errNATSNotConnected = errors.New("nats is not connected")
-
-var errParseCACert = fmt.Errorf("failed to parse CA certificate")
 
 func main() {
 	if err := run(); err != nil {
@@ -128,29 +124,16 @@ func initPostgres(ctx context.Context, databaseURL string) (*pgxpool.Pool, error
 }
 
 func initNATS(ctx context.Context, cfg *config.Config) (*natsx.Client, error) {
-	natsOpts := []nats.Option{
-		nats.Name("payment-service"),
-		nats.Secure(&tls.Config{
-			MinVersion: tls.VersionTLS12,
-		}),
-	}
-
-	natsOpts = append(natsOpts,
-		nats.ClientCert(cfg.NATSTLSCertFile, cfg.NATSTLSKeyFile),
-		nats.RootCAs(cfg.NATSTLSCAFile),
-	)
-
-	conn, err := nats.Connect(cfg.NATSURL, natsOpts...)
+	client, err := natsx.Connect(ctx, natsx.ConnectConfig{
+		URL:      cfg.NATSURL,
+		Name:     "payment-service",
+		CertFile: cfg.NATSTLSCertFile,
+		KeyFile:  cfg.NATSTLSKeyFile,
+		CAFile:   cfg.NATSTLSCAFile,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("connect to NATS: %w", err)
+		return nil, fmt.Errorf("connect nats: %w", err)
 	}
-
-	client, err := natsx.New(ctx, conn)
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("init jetstream: %w", err)
-	}
-
 	slog.Info("connected to NATS", slog.String("url", cfg.NATSURL))
 	return client, nil
 }
@@ -180,8 +163,7 @@ func initMetrics(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, cl
 	metricsServer.Register(grpcRequests)
 
 	mux := metricsServer.Mux()
-	mux.HandleFunc("GET /health", health.LivenessHandler())
-	mux.HandleFunc("GET /ready", health.ReadinessHandler(health.NewChecker(map[string]health.CheckFunc{
+	health.Mount(mux, health.NewChecker(map[string]health.CheckFunc{
 		"postgres": func(ctx context.Context) error {
 			return pool.Ping(ctx)
 		},
@@ -191,7 +173,7 @@ func initMetrics(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, cl
 			}
 			return nil
 		},
-	})))
+	}))
 
 	if _, err := metricsServer.ListenAndServeWithMux(ctx, cfg.MetricsAddr, mux); err != nil {
 		return nil, nil, fmt.Errorf("listen metrics: %w", err)
@@ -246,42 +228,15 @@ func serveGRPC(
 }
 
 func newGRPCServer(cfg *config.Config, paymentSvc *app.PaymentService, grpcRequests *prometheus.CounterVec) (*grpc.Server, *grpchealth.Server, error) {
-	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+	tlsConfig, err := tlsutil.LoadMTLSServerTLSConfig(cfg.TLSCertFile, cfg.TLSKeyFile, cfg.TLSClientCAFile)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load TLS cert: %w", err)
+		return nil, nil, fmt.Errorf("load mtls: %w", err)
 	}
-
-	caCert, err := os.ReadFile(cfg.TLSClientCAFile)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read CA cert: %w", err)
-	}
-
-	caCertPool := x509.NewCertPool()
-	if !caCertPool.AppendCertsFromPEM(caCert) {
-		return nil, nil, errParseCACert
-	}
-
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		ClientCAs:    caCertPool,
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		MinVersion:   tls.VersionTLS12,
-	}
-
-	creds := credentials.NewTLS(tlsConfig)
 
 	srv := grpc.NewServer(
-		grpc.Creds(creds),
-		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-			resp, err := handler(ctx, req)
-			statusLabel := "ok"
-			if err != nil {
-				statusLabel = "error"
-			}
-			grpcRequests.WithLabelValues(info.FullMethod, statusLabel).Inc()
-			return resp, err
-		}),
+		grpc.Creds(credentials.NewTLS(tlsConfig)),
+		grpcx.ServerStatsHandler(),
+		grpc.UnaryInterceptor(grpcx.MetricsUnaryInterceptor(grpcRequests)),
 	)
 
 	paymentServer := grpcadapter.NewPaymentServer(paymentSvc)
