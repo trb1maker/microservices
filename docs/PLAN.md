@@ -207,7 +207,18 @@
 **Соответствует ДЗ:** «Рефакторим систему под требования отказоустойчивости» (срок до 07.09)  
 **Цель:** Анализ архитектуры, внедрение паттернов устойчивости, улучшение производительности.
 
-**Задачи (обязательные):**
+**Фундамент (эта волна, спринт 8 ещё не закрыт):**
+
+- [x] Перейти на Go 1.27 и `uuid.NewV7()`.
+- [x] Сузить depguard до белых списков по слоям.
+- [x] Протянуть OpenTelemetry через NATS Extract и gRPC Payment.
+- [x] Вынести общие контракты событий, NATS/gRPC helpers и migrate в `internal/platform`.
+- [x] Общий transactional outbox с backoff (order, payment, store).
+- [x] Идемпотентность Charge/Refund и Reserve/Confirm/Release по `(order_id, operation)`.
+- [x] Inbox для stateful-потребителей (order saga, store); analytics/notification без shared inbox.
+- [x] Mongo replica init без фиксированного `sleep 5`; пароль replicator только из `REPLICATION_PASSWORD`.
+
+**Задачи (обязательные, следующая волна):**
 
 - [ ] Провести анализ текущей архитектуры на предмет узких мест (документировать в ADR).
 - [ ] Внедрить **Circuit Breaker** для gRPC-вызовов (например, с помощью `gobreaker` или `sony/gobreaker`).
