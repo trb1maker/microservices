@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/trb1maker/microservices/internal/payment-service/domain"
+	"github.com/trb1maker/microservices/internal/platform/events"
 )
 
 // AccountRepository defines the interface for account storage.
@@ -31,40 +32,9 @@ type EventPublisher interface {
 	PublishRefundFailed(ctx context.Context, event RefundFailedEvent) error
 }
 
-// PaymentSucceededEvent is published after a successful charge.
-type PaymentSucceededEvent struct {
-	OrderID       string `json:"order_id"`
-	UserID        string `json:"user_id"`
-	Amount        int64  `json:"amount"`
-	TransactionID string `json:"transaction_id"`
-	Timestamp     string `json:"timestamp"`
-}
-
-// PaymentFailedEvent is published after a failed charge.
-type PaymentFailedEvent struct {
-	OrderID   string `json:"order_id"`
-	UserID    string `json:"user_id"`
-	Amount    int64  `json:"amount"`
-	Reason    string `json:"reason"`
-	Timestamp string `json:"timestamp"`
-}
-
-// RefundSucceededEvent is published after a successful refund.
-type RefundSucceededEvent struct {
-	OrderID               string `json:"order_id"`
-	UserID                string `json:"user_id"`
-	Amount                int64  `json:"amount"`
-	TransactionID         string `json:"transaction_id"`
-	OriginalTransactionID string `json:"original_transaction_id"`
-	Timestamp             string `json:"timestamp"`
-}
-
-// RefundFailedEvent is published after a failed refund.
-type RefundFailedEvent struct {
-	OrderID               string `json:"order_id"`
-	UserID                string `json:"user_id"`
-	Amount                int64  `json:"amount"`
-	OriginalTransactionID string `json:"original_transaction_id"`
-	Reason                string `json:"reason"`
-	Timestamp             string `json:"timestamp"`
-}
+type (
+	PaymentSucceededEvent = events.PaymentSucceeded
+	PaymentFailedEvent    = events.PaymentFailed
+	RefundSucceededEvent  = events.RefundSucceeded
+	RefundFailedEvent     = events.RefundFailed
+)

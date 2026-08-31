@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	goredis "github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -116,8 +114,7 @@ func startMetricsServer(
 ) error {
 	metricsServer := metrics.NewServer("store_service", cfg.MetricsPath)
 	mux := metricsServer.Mux()
-	mux.HandleFunc("GET /health", health.LivenessHandler())
-	mux.HandleFunc("GET /ready", health.ReadinessHandler(health.NewChecker(map[string]health.CheckFunc{
+	health.Mount(mux, health.NewChecker(map[string]health.CheckFunc{
 		"mongodb": func(ctx context.Context) error {
 			return mongoClient.Ping(ctx, nil)
 		},
@@ -136,7 +133,7 @@ func startMetricsServer(
 			}
 			return nil
 		},
-	})))
+	}))
 	if _, err := metricsServer.ListenAndServeWithMux(ctx, cfg.MetricsAddr, mux); err != nil {
 		return fmt.Errorf("start metrics server: %w", err)
 	}
@@ -170,31 +167,16 @@ func initMongo(ctx context.Context, cfg *config.Config) (*mongo.Client, *mongo.D
 }
 
 func initNATS(ctx context.Context, cfg *config.Config) (*natsx.Client, error) {
-	natsOpts := []nats.Option{
-		nats.Name("store-service"),
-		nats.Secure(&tls.Config{
-			MinVersion: tls.VersionTLS12,
-		}),
-	}
-
-	if cfg.NATSTLSCertFile != "" && cfg.NATSTLSKeyFile != "" {
-		natsOpts = append(natsOpts,
-			nats.ClientCert(cfg.NATSTLSCertFile, cfg.NATSTLSKeyFile),
-			nats.RootCAs(cfg.NATSTLSCAFile),
-		)
-	}
-
-	nc, err := nats.Connect(cfg.NATSURL, natsOpts...)
+	client, err := natsx.Connect(ctx, natsx.ConnectConfig{
+		URL:      cfg.NATSURL,
+		Name:     "store-service",
+		CertFile: cfg.NATSTLSCertFile,
+		KeyFile:  cfg.NATSTLSKeyFile,
+		CAFile:   cfg.NATSTLSCAFile,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("connect to NATS: %w", err)
+		return nil, fmt.Errorf("connect nats: %w", err)
 	}
-
-	client, err := natsx.New(ctx, nc)
-	if err != nil {
-		nc.Close()
-		return nil, fmt.Errorf("init jetstream: %w", err)
-	}
-
 	slog.Info("connected to NATS", slog.String("url", cfg.NATSURL))
 	return client, nil
 }

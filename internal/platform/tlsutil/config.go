@@ -34,6 +34,19 @@ func LoadServerTLSConfig(certFile, keyFile, clientCAFile string) (*tls.Config, e
 	return cfg, nil
 }
 
+func LoadMTLSServerTLSConfig(certFile, keyFile, clientCAFile string) (*tls.Config, error) {
+	if clientCAFile == "" {
+		return nil, fmt.Errorf("%w: client CA is required", ErrParseClientCA)
+	}
+
+	cfg, err := LoadServerTLSConfig(certFile, keyFile, clientCAFile)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ClientAuth = tls.RequireAndVerifyClientCert
+	return cfg, nil
+}
+
 func LoadClientCAPool(clientCAFile string) (*x509.CertPool, error) {
 	caPEM, err := os.ReadFile(clientCAFile) //nolint:gosec // path comes from trusted service configuration
 	if err != nil {
