@@ -11,6 +11,7 @@ import (
 	paymentpb "github.com/trb1maker/microservices/internal/platform/proto/payment"
 	"github.com/trb1maker/microservices/internal/platform/tlsutil"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -36,14 +37,20 @@ type PaymentClient struct {
 func NewPaymentClient(ctx context.Context, cfg ClientConfig) (*PaymentClient, error) {
 	_ = ctx
 	if cfg.Insecure {
-		return newPaymentClient(cfg.Addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		return newPaymentClient(cfg.Addr,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		)
 	}
 
 	tlsConfig, err := loadClientTLS(cfg)
 	if err != nil {
 		return nil, err
 	}
-	return newPaymentClient(cfg.Addr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
+	return newPaymentClient(cfg.Addr,
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
 }
 
 func newPaymentClient(addr string, opts ...grpc.DialOption) (*PaymentClient, error) {

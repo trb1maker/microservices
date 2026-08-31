@@ -9,6 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/trb1maker/microservices/internal/platform/otel/natsprop"
 )
 
 const (
@@ -86,7 +87,7 @@ func (c *Client) ConsumeDurable(
 			Reply:   msg.Reply(),
 		}
 
-		if err := handler(ctx, nmsg); err != nil {
+		if err := handler(natsprop.Extract(ctx, nmsg), nmsg); err != nil {
 			slog.Error("jetstream handler failed",
 				slog.String("subject", nmsg.Subject),
 				slog.String("durable", durable),
