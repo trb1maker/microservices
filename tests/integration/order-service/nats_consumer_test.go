@@ -32,6 +32,7 @@ func TestConsumer_handleReservationFailed_routesToCartAndOrder(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	consumerCtx := context.WithoutCancel(ctx)
 
 	natsContainer, err := tcnats.Run(ctx, natstest.Image, natstest.ContainerOptions()...)
 	require.NoError(t, err)
@@ -40,8 +41,8 @@ func TestConsumer_handleReservationFailed_routesToCartAndOrder(t *testing.T) {
 	natsURL, err := natsContainer.ConnectionString(ctx)
 	require.NoError(t, err)
 
-	nc := natstest.Connect(t, natsURL)
-	t.Cleanup(nc.Close)
+	client := natstest.NewClient(t, natsURL)
+	t.Cleanup(client.Conn().Close)
 
 	cartRepo := cartmemory.NewCartRepository()
 	orderRepo := ordermemory.NewOrderRepository()
@@ -72,12 +73,12 @@ func TestConsumer_handleReservationFailed_routesToCartAndOrder(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, orderRepo.Save(context.Background(), paidOrder))
 
-	consumer := natsadapter.NewConsumer(nc, natsadapter.Subjects{
+	consumer := natsadapter.NewConsumer(client, natsadapter.Subjects{
 		ItemsReserved:     itemsReservedTestSubject,
 		ReservationFailed: reservationFailedTestSubject,
 		OrderConfirmed:    orderConfirmedTestSubject,
 	}, carts, orders)
-	require.NoError(t, consumer.Start())
+	require.NoError(t, consumer.Start(consumerCtx))
 	t.Cleanup(consumer.Close)
 
 	event := app.ReservationFailed{
@@ -89,8 +90,7 @@ func TestConsumer_handleReservationFailed_routesToCartAndOrder(t *testing.T) {
 	}
 	payload, err := json.Marshal(event)
 	require.NoError(t, err)
-	require.NoError(t, nc.Publish(reservationFailedTestSubject, payload))
-	require.NoError(t, nc.Flush())
+	require.NoError(t, client.Publish(ctx, reservationFailedTestSubject, payload))
 
 	require.Eventually(t, func() bool {
 		current, getErr := orderRepo.Get(context.Background(), orderID)

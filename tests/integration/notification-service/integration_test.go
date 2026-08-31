@@ -42,6 +42,7 @@ func (s *recordingSink) Notify(_ context.Context, eventType, _, orderID, _, _ st
 func TestIntegration_AllNotificationSubjects(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	consumerCtx := context.WithoutCancel(ctx)
 
 	container, err := tcnats.Run(ctx, natstest.Image, natstest.ContainerOptions()...)
 	require.NoError(t, err)
@@ -50,24 +51,24 @@ func TestIntegration_AllNotificationSubjects(t *testing.T) {
 	url, err := container.ConnectionString(ctx)
 	require.NoError(t, err)
 
-	nc := natstest.Connect(t, url)
-	t.Cleanup(nc.Close)
+	client := natstest.NewClient(t, url)
+	t.Cleanup(client.Conn().Close)
 
 	sink := &recordingSink{ch: make(chan appCall, 5)}
 	svc := app.NewNotificationService(sink)
-	consumer := natsadapter.NewConsumer(nc, natsadapter.Subjects{
+	consumer := natsadapter.NewConsumer(client, natsadapter.Subjects{
 		OrderFinalized:   orderFinalizedSubject,
 		OrderCancelled:   orderCancelledSubject,
 		PaymentSucceeded: paymentSucceededSubject,
 		RefundSucceeded:  refundSucceededSubject,
 	}, svc)
-	require.NoError(t, consumer.Start())
+	require.NoError(t, consumer.Start(consumerCtx))
 	t.Cleanup(consumer.Close)
 
 	publish := func(subject string, payload any) {
 		data, err := json.Marshal(payload)
 		require.NoError(t, err)
-		require.NoError(t, nc.Publish(subject, data))
+		require.NoError(t, client.Publish(ctx, subject, data))
 	}
 
 	publish(orderFinalizedSubject, app.OrderFinalized{OrderID: "o1", UserID: "u1"})

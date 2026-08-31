@@ -18,6 +18,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
+	"github.com/trb1maker/microservices/internal/platform/natsx"
 	mongoadapter "github.com/trb1maker/microservices/internal/store-service/adapters/mongodb"
 	natsadapter "github.com/trb1maker/microservices/internal/store-service/adapters/nats"
 	"github.com/trb1maker/microservices/internal/store-service/app"
@@ -34,12 +35,11 @@ const (
 	reservationReleasedSubj = "store.reservation_released"
 )
 
-func setupTestInfra(t *testing.T) (*mongo.Database, *nats.Conn, func()) {
+func setupTestInfra(t *testing.T) (*mongo.Database, *natsx.Client, func()) {
 	t.Helper()
 
 	ctx := context.Background()
 
-	// MongoDB container
 	mongoC, err := mongocontainer.Run(ctx, "mongo:8.0")
 	require.NoError(t, err)
 
@@ -50,22 +50,18 @@ func setupTestInfra(t *testing.T) (*mongo.Database, *nats.Conn, func()) {
 	require.NoError(t, err)
 
 	db := client.Database("test_store")
+	require.NoError(t, mongoadapter.SeedProducts(ctx, db))
 
-	// Seed products
-	err = mongoadapter.SeedProducts(ctx, db)
-	require.NoError(t, err)
-
-	// NATS container
 	natsC, err := natscontainer.Run(ctx, natstest.Image, natstest.ContainerOptions()...)
 	require.NoError(t, err)
 
 	natsURI, err := natsC.ConnectionString(ctx)
 	require.NoError(t, err)
 
-	nc := natstest.Connect(t, natsURI, nats.Name("test-store"))
+	nc := natstest.NewClient(t, natsURI, nats.Name("test-store"))
 
 	cleanup := func() {
-		nc.Close()
+		nc.Conn().Close()
 		if err := client.Disconnect(ctx); err != nil {
 			t.Logf("disconnect mongo: %v", err)
 		}
@@ -80,48 +76,58 @@ func setupTestInfra(t *testing.T) (*mongo.Database, *nats.Conn, func()) {
 	return db, nc, cleanup
 }
 
-func mustFlush(t *testing.T, nc *nats.Conn) {
+func jsSubscribe(t *testing.T, client *natsx.Client, subject, durable string) chan *nats.Msg {
 	t.Helper()
-	require.NoError(t, nc.Flush())
-}
-
-func subscribeSync(t *testing.T, nc *nats.Conn, subject string) *nats.Subscription {
-	t.Helper()
-	sub, err := nc.SubscribeSync(subject)
+	ch := make(chan *nats.Msg, 1)
+	_, err := client.ConsumeDurable(context.Background(), natsx.StreamForSubject(subject), durable, subject, func(_ context.Context, msg *nats.Msg) error {
+		copyMsg := &nats.Msg{
+			Subject: msg.Subject,
+			Data:    append([]byte(nil), msg.Data...),
+			Header:  msg.Header,
+		}
+		select {
+		case ch <- copyMsg:
+		default:
+		}
+		return nil
+	}, natsx.DurableConsumerConfig{})
 	require.NoError(t, err)
-	mustFlush(t, nc)
-	return sub
+	return ch
 }
 
-func nextMessage(t *testing.T, sub *nats.Subscription, timeout time.Duration) *nats.Msg {
-	t.Helper()
-	msg, err := sub.NextMsg(timeout)
-	if err != nil {
+func nextMessageFrom(ch chan *nats.Msg, timeout time.Duration) *nats.Msg {
+	select {
+	case msg := <-ch:
+		return msg
+	case <-time.After(timeout):
 		return nil
 	}
-	return msg
+}
+
+func publishMsg(t *testing.T, client *natsx.Client, msg *nats.Msg) {
+	t.Helper()
+	require.NoError(t, client.PublishMsg(context.Background(), msg))
+}
+
+func publishPayload(t *testing.T, client *natsx.Client, subject string, payload []byte) {
+	t.Helper()
+	require.NoError(t, client.Publish(context.Background(), subject, payload))
 }
 
 func TestStoreService_ReserveItems_Success(t *testing.T) {
-	db, nc, cleanup := setupTestInfra(t)
+	db, client, cleanup := setupTestInfra(t)
 	defer cleanup()
 
 	productRepo := mongoadapter.NewProductRepository(db)
 	stockRepo := mongoadapter.NewStockRepository(db)
-	eventPub := natsadapter.NewEventPublisher(nc, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
+	eventPub := natsadapter.NewEventPublisher(client, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
 	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
 
 	worker := natsadapter.NewWorker(storeSvc)
-	err := worker.SubscribeAll(nc, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
+	err := worker.SubscribeAll(context.Background(), client, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
 	require.NoError(t, err)
-	mustFlush(t, nc)
 
-	sub := subscribeSync(t, nc, itemsReservedSubj)
-	defer func() {
-		if err := sub.Unsubscribe(); err != nil {
-			t.Logf("unsubscribe: %v", err)
-		}
-	}()
+	eventCh := jsSubscribe(t, client, itemsReservedSubj, "test-items-reserved")
 
 	payload, _ := json.Marshal(map[string]any{
 		"user_id":    "user-1",
@@ -132,11 +138,9 @@ func TestStoreService_ReserveItems_Success(t *testing.T) {
 	msg.Header.Set("X-Order-ID", "order-1")
 	msg.Data = payload
 
-	err = nc.PublishMsg(msg)
-	require.NoError(t, err)
-	mustFlush(t, nc)
+	publishMsg(t, client, msg)
 
-	eventMsg := nextMessage(t, sub, 5*time.Second)
+	eventMsg := nextMessageFrom(eventCh, 5*time.Second)
 	require.NotNil(t, eventMsg, "expected items_reserved event")
 
 	var event app.ItemsReservedEvent
@@ -156,25 +160,19 @@ func TestStoreService_ReserveItems_Success(t *testing.T) {
 }
 
 func TestStoreService_ReserveItems_InsufficientStock(t *testing.T) {
-	db, nc, cleanup := setupTestInfra(t)
+	db, client, cleanup := setupTestInfra(t)
 	defer cleanup()
 
 	productRepo := mongoadapter.NewProductRepository(db)
 	stockRepo := mongoadapter.NewStockRepository(db)
-	eventPub := natsadapter.NewEventPublisher(nc, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
+	eventPub := natsadapter.NewEventPublisher(client, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
 	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
 
 	worker := natsadapter.NewWorker(storeSvc)
-	err := worker.SubscribeAll(nc, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
+	err := worker.SubscribeAll(context.Background(), client, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
 	require.NoError(t, err)
-	mustFlush(t, nc)
 
-	sub := subscribeSync(t, nc, reservationFailedSubj)
-	defer func() {
-		if err := sub.Unsubscribe(); err != nil {
-			t.Logf("unsubscribe: %v", err)
-		}
-	}()
+	eventCh := jsSubscribe(t, client, reservationFailedSubj, "test-reservation-failed")
 
 	payload, _ := json.Marshal(map[string]any{
 		"user_id":    "user-1",
@@ -185,11 +183,9 @@ func TestStoreService_ReserveItems_InsufficientStock(t *testing.T) {
 	msg.Header.Set("X-Order-ID", "order-1")
 	msg.Data = payload
 
-	err = nc.PublishMsg(msg)
-	require.NoError(t, err)
-	mustFlush(t, nc)
+	publishMsg(t, client, msg)
 
-	eventMsg := nextMessage(t, sub, 5*time.Second)
+	eventMsg := nextMessageFrom(eventCh, 5*time.Second)
 	require.NotNil(t, eventMsg, "expected reservation_failed event")
 
 	var event app.ReservationFailedEvent
@@ -210,18 +206,17 @@ func TestStoreService_ReserveItems_InsufficientStock(t *testing.T) {
 }
 
 func TestStoreService_ConfirmOrder_Success(t *testing.T) {
-	db, nc, cleanup := setupTestInfra(t)
+	db, client, cleanup := setupTestInfra(t)
 	defer cleanup()
 
 	productRepo := mongoadapter.NewProductRepository(db)
 	stockRepo := mongoadapter.NewStockRepository(db)
-	eventPub := natsadapter.NewEventPublisher(nc, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
+	eventPub := natsadapter.NewEventPublisher(client, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
 	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
 
 	worker := natsadapter.NewWorker(storeSvc)
-	err := worker.SubscribeAll(nc, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
+	err := worker.SubscribeAll(context.Background(), client, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
 	require.NoError(t, err)
-	mustFlush(t, nc)
 
 	// First reserve items
 	payload, _ := json.Marshal(map[string]any{
@@ -233,9 +228,7 @@ func TestStoreService_ConfirmOrder_Success(t *testing.T) {
 	msg.Header.Set("X-Order-ID", "order-1")
 	msg.Data = payload
 
-	err = nc.PublishMsg(msg)
-	require.NoError(t, err)
-	mustFlush(t, nc)
+	publishMsg(t, client, msg)
 
 	time.Sleep(500 * time.Millisecond)
 
@@ -247,9 +240,7 @@ func TestStoreService_ConfirmOrder_Success(t *testing.T) {
 		"quantity":   3,
 	})
 
-	err = nc.Publish(confirmOrderSubj, confirmPayload)
-	require.NoError(t, err)
-	mustFlush(t, nc)
+	publishPayload(t, client, confirmOrderSubj, confirmPayload)
 
 	time.Sleep(500 * time.Millisecond)
 
@@ -261,25 +252,19 @@ func TestStoreService_ConfirmOrder_Success(t *testing.T) {
 }
 
 func TestStoreService_ReleaseReservation_Success(t *testing.T) {
-	db, nc, cleanup := setupTestInfra(t)
+	db, client, cleanup := setupTestInfra(t)
 	defer cleanup()
 
 	productRepo := mongoadapter.NewProductRepository(db)
 	stockRepo := mongoadapter.NewStockRepository(db)
-	eventPub := natsadapter.NewEventPublisher(nc, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
+	eventPub := natsadapter.NewEventPublisher(client, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
 	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
 
 	worker := natsadapter.NewWorker(storeSvc)
-	err := worker.SubscribeAll(nc, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
+	err := worker.SubscribeAll(context.Background(), client, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
 	require.NoError(t, err)
-	mustFlush(t, nc)
 
-	sub := subscribeSync(t, nc, reservationReleasedSubj)
-	defer func() {
-		if err := sub.Unsubscribe(); err != nil {
-			t.Logf("unsubscribe: %v", err)
-		}
-	}()
+	eventCh := jsSubscribe(t, client, reservationReleasedSubj, "test-reservation-released")
 
 	payload, _ := json.Marshal(map[string]any{
 		"user_id":    "user-1",
@@ -290,9 +275,7 @@ func TestStoreService_ReleaseReservation_Success(t *testing.T) {
 	msg.Header.Set("X-Order-ID", "order-1")
 	msg.Data = payload
 
-	err = nc.PublishMsg(msg)
-	require.NoError(t, err)
-	mustFlush(t, nc)
+	publishMsg(t, client, msg)
 
 	time.Sleep(500 * time.Millisecond)
 
@@ -303,11 +286,9 @@ func TestStoreService_ReleaseReservation_Success(t *testing.T) {
 		"quantity":   2,
 	})
 
-	err = nc.Publish(releaseReservationSubj, releasePayload)
-	require.NoError(t, err)
-	mustFlush(t, nc)
+	publishPayload(t, client, releaseReservationSubj, releasePayload)
 
-	eventMsg := nextMessage(t, sub, 5*time.Second)
+	eventMsg := nextMessageFrom(eventCh, 5*time.Second)
 	require.NotNil(t, eventMsg, "expected reservation_released event")
 
 	var event app.ReservationReleasedEvent
@@ -327,25 +308,19 @@ func TestStoreService_ReleaseReservation_Success(t *testing.T) {
 }
 
 func TestStoreService_ProductNotFound(t *testing.T) {
-	db, nc, cleanup := setupTestInfra(t)
+	db, client, cleanup := setupTestInfra(t)
 	defer cleanup()
 
 	productRepo := mongoadapter.NewProductRepository(db)
 	stockRepo := mongoadapter.NewStockRepository(db)
-	eventPub := natsadapter.NewEventPublisher(nc, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
+	eventPub := natsadapter.NewEventPublisher(client, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
 	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
 
 	worker := natsadapter.NewWorker(storeSvc)
-	err := worker.SubscribeAll(nc, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
+	err := worker.SubscribeAll(context.Background(), client, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
 	require.NoError(t, err)
-	mustFlush(t, nc)
 
-	sub := subscribeSync(t, nc, reservationFailedSubj)
-	defer func() {
-		if err := sub.Unsubscribe(); err != nil {
-			t.Logf("unsubscribe: %v", err)
-		}
-	}()
+	eventCh := jsSubscribe(t, client, reservationFailedSubj, "test-product-not-found-failed")
 
 	payload, _ := json.Marshal(map[string]any{
 		"user_id":    "user-1",
@@ -356,11 +331,9 @@ func TestStoreService_ProductNotFound(t *testing.T) {
 	msg.Header.Set("X-Order-ID", "order-1")
 	msg.Data = payload
 
-	err = nc.PublishMsg(msg)
-	require.NoError(t, err)
-	mustFlush(t, nc)
+	publishMsg(t, client, msg)
 
-	eventMsg := nextMessage(t, sub, 5*time.Second)
+	eventMsg := nextMessageFrom(eventCh, 5*time.Second)
 	require.NotNil(t, eventMsg, "expected reservation_failed event")
 
 	var event app.ReservationFailedEvent
@@ -373,18 +346,17 @@ func TestStoreService_ProductNotFound(t *testing.T) {
 }
 
 func TestStoreService_FullLifecycle(t *testing.T) {
-	db, nc, cleanup := setupTestInfra(t)
+	db, client, cleanup := setupTestInfra(t)
 	defer cleanup()
 
 	productRepo := mongoadapter.NewProductRepository(db)
 	stockRepo := mongoadapter.NewStockRepository(db)
-	eventPub := natsadapter.NewEventPublisher(nc, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
+	eventPub := natsadapter.NewEventPublisher(client, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
 	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
 
 	worker := natsadapter.NewWorker(storeSvc)
-	err := worker.SubscribeAll(nc, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
+	err := worker.SubscribeAll(context.Background(), client, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
 	require.NoError(t, err)
-	mustFlush(t, nc)
 
 	// Step 1: Reserve items for order-1
 	payload1, _ := json.Marshal(map[string]any{
@@ -396,8 +368,7 @@ func TestStoreService_FullLifecycle(t *testing.T) {
 	msg1.Header.Set("X-Order-ID", "order-1")
 	msg1.Data = payload1
 
-	err = nc.PublishMsg(msg1)
-	require.NoError(t, err)
+	publishMsg(t, client, msg1)
 
 	// Reserve items for order-2
 	payload2, _ := json.Marshal(map[string]any{
@@ -409,9 +380,7 @@ func TestStoreService_FullLifecycle(t *testing.T) {
 	msg2.Header.Set("X-Order-ID", "order-2")
 	msg2.Data = payload2
 
-	err = nc.PublishMsg(msg2)
-	require.NoError(t, err)
-	mustFlush(t, nc)
+	publishMsg(t, client, msg2)
 
 	time.Sleep(500 * time.Millisecond)
 
@@ -428,9 +397,7 @@ func TestStoreService_FullLifecycle(t *testing.T) {
 		"product_id": "prod-1",
 		"quantity":   2,
 	})
-	err = nc.Publish(confirmOrderSubj, confirmPayload)
-	require.NoError(t, err)
-	mustFlush(t, nc)
+	publishPayload(t, client, confirmOrderSubj, confirmPayload)
 
 	time.Sleep(500 * time.Millisecond)
 
@@ -447,9 +414,7 @@ func TestStoreService_FullLifecycle(t *testing.T) {
 		"product_id": "prod-1",
 		"quantity":   3,
 	})
-	err = nc.Publish(releaseReservationSubj, releasePayload)
-	require.NoError(t, err)
-	mustFlush(t, nc)
+	publishPayload(t, client, releaseReservationSubj, releasePayload)
 
 	time.Sleep(500 * time.Millisecond)
 
@@ -461,29 +426,19 @@ func TestStoreService_FullLifecycle(t *testing.T) {
 }
 
 func TestStoreService_ConcurrentReservations(t *testing.T) {
-	db, nc, cleanup := setupTestInfra(t)
+	db, client, cleanup := setupTestInfra(t)
 	defer cleanup()
 
 	productRepo := mongoadapter.NewProductRepository(db)
 	stockRepo := mongoadapter.NewStockRepository(db)
-	eventPub := natsadapter.NewEventPublisher(nc, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
+	eventPub := natsadapter.NewEventPublisher(client, itemsReservedSubj, reservationFailedSubj, orderConfirmedSubj, reservationReleasedSubj)
 	storeSvc := app.NewStoreService(productRepo, stockRepo, eventPub, nil)
 
 	worker := natsadapter.NewWorker(storeSvc)
-	err := worker.SubscribeAll(nc, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
+	err := worker.SubscribeAll(context.Background(), client, reserveItemsSubj, confirmOrderSubj, releaseReservationSubj)
 	require.NoError(t, err)
-	mustFlush(t, nc)
 
-	// Subscribe to reservation failed events
-	failedChan := make(chan *nats.Msg, 10)
-	failedSub, err := nc.Subscribe(reservationFailedSubj, func(msg *nats.Msg) {
-		select {
-		case failedChan <- msg:
-		default:
-		}
-	})
-	require.NoError(t, err)
-	defer failedSub.Unsubscribe()
+	failedCh := jsSubscribe(t, client, reservationFailedSubj, "test-concurrent-failed")
 
 	// Try to reserve more than available concurrently
 	numRequests := 15
@@ -500,12 +455,11 @@ func TestStoreService_ConcurrentReservations(t *testing.T) {
 		msg.Header.Set("X-Order-ID", orderID)
 		msg.Data = payload
 
-		err = nc.PublishMsg(msg)
-		require.NoError(t, err)
+		publishMsg(t, client, msg)
 	}
-	mustFlush(t, nc)
 
 	time.Sleep(2 * time.Second)
+	_ = failedCh
 
 	// Verify total reserved <= available (10)
 	stock, err := stockRepo.Get(context.Background(), "prod-1")
