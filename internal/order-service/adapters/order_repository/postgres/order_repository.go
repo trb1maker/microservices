@@ -203,7 +203,6 @@ func buildOrder(orderID domain.OrderID, row *orderRow, history []domain.StatusHi
 	return order, nil
 }
 
-//nolint:funlen // A single transaction keeps order and history consistent.
 func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -211,6 +210,18 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if err := r.SaveTx(ctx, tx, order); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+	return nil
+}
+
+// SaveTx writes order state using an existing transaction.
+func (r *OrderRepository) SaveTx(ctx context.Context, tx pgx.Tx, order *domain.Order) error {
 	var paymentID *uuid.UUID
 	if order.PaymentID() != (domain.PaymentID{}) {
 		id := uuid.UUID(order.PaymentID())
@@ -227,7 +238,7 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 			delivery_address = EXCLUDED.delivery_address,
 			updated_at = EXCLUDED.updated_at`
 
-	_, err = tx.Exec(
+	if _, err := tx.Exec(
 		ctx,
 		upsertOrder,
 		uuid.UUID(order.OrderID()),
@@ -238,8 +249,7 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 		order.DeliveryAddress(),
 		order.CreatedAt(),
 		order.UpdatedAt(),
-	)
-	if err != nil {
+	); err != nil {
 		return fmt.Errorf("upsert order: %w", err)
 	}
 
@@ -253,7 +263,7 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 		VALUES ($1, $2, $3, $4, $5)`
 
 	for _, item := range order.Items() {
-		_, err := tx.Exec(
+		if _, err := tx.Exec(
 			ctx,
 			insertItem,
 			uuid.UUID(order.OrderID()),
@@ -261,8 +271,7 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 			item.Quantity(),
 			item.UnitPrice(),
 			item.TotalPrice(),
-		)
-		if err != nil {
+		); err != nil {
 			return fmt.Errorf("insert order item: %w", err)
 		}
 	}
@@ -285,10 +294,6 @@ func (r *OrderRepository) Save(ctx context.Context, order *domain.Order) error {
 		); err != nil {
 			return fmt.Errorf("insert status history: %w", err)
 		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit tx: %w", err)
 	}
 
 	return nil

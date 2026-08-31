@@ -8,6 +8,7 @@ import (
 	"github.com/trb1maker/microservices/internal/order-service/app"
 
 	"github.com/nats-io/nats.go"
+	"github.com/trb1maker/microservices/internal/platform/natsx"
 	"github.com/trb1maker/microservices/internal/platform/otel/natsprop"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -29,12 +30,12 @@ type Subjects struct {
 }
 
 type Publisher struct {
-	conn     *nats.Conn
+	client   *natsx.Client
 	subjects Subjects
 }
 
-func NewPublisher(conn *nats.Conn, subjects Subjects) *Publisher {
-	return &Publisher{conn: conn, subjects: subjects}
+func NewPublisher(client *natsx.Client, subjects Subjects) *Publisher {
+	return &Publisher{client: client, subjects: subjects}
 }
 
 func (p *Publisher) PublishReserveItems(ctx context.Context, event app.ReserveItems, orderID string) error {
@@ -62,7 +63,7 @@ func (p *Publisher) PublishOrderCancelled(ctx context.Context, event app.OrderCa
 }
 
 func (p *Publisher) IsConnected() bool {
-	return p.conn != nil && p.conn.IsConnected()
+	return p.client != nil && p.client.Conn().IsConnected()
 }
 
 func (p *Publisher) publishJSON(ctx context.Context, subject string, event any, orderID string) error {
@@ -89,7 +90,7 @@ func (p *Publisher) publishJSON(ctx context.Context, subject string, event any, 
 	}
 	natsprop.Inject(ctx, msg)
 
-	if err := p.conn.PublishMsg(msg); err != nil {
+	if err := p.client.PublishMsg(ctx, msg); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 

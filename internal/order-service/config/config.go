@@ -63,6 +63,9 @@ type Config struct {
 	RateLimitEnabled  bool          `env:"RATE_LIMIT_ENABLED" envDefault:"true"`
 	RateLimitRequests int           `env:"RATE_LIMIT_REQUESTS" envDefault:"100"`
 	RateLimitWindow   time.Duration `env:"RATE_LIMIT_WINDOW" envDefault:"1m"`
+
+	OutboxPollInterval time.Duration `env:"OUTBOX_POLL_INTERVAL" envDefault:"500ms"`
+	OutboxBatchSize    int           `env:"OUTBOX_BATCH_SIZE" envDefault:"50"`
 }
 
 func Load() (*Config, error) {

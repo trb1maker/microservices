@@ -10,19 +10,22 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/nats-io/nats.go"
 	goredis "github.com/redis/go-redis/v9"
 
 	cartredis "github.com/trb1maker/microservices/internal/order-service/adapters/cart_repository/redis"
+	checkoutpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/checkout_writer/postgres"
 	natsconsumer "github.com/trb1maker/microservices/internal/order-service/adapters/event_consumer/nats"
 	natsadapter "github.com/trb1maker/microservices/internal/order-service/adapters/event_publisher/nats"
 	httpadapter "github.com/trb1maker/microservices/internal/order-service/adapters/http"
 	orderpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/order_repository/postgres"
+	outboxrelay "github.com/trb1maker/microservices/internal/order-service/adapters/outbox_relay"
+	outboxpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/outbox_repository/postgres"
 	paymentgrpc "github.com/trb1maker/microservices/internal/order-service/adapters/payment/grpc"
 	userpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/user_repository/postgres"
 	"github.com/trb1maker/microservices/internal/order-service/app"
 	"github.com/trb1maker/microservices/internal/order-service/domain"
 	"github.com/trb1maker/microservices/internal/order-service/migrations"
+	"github.com/trb1maker/microservices/internal/platform/natsx"
 
 	"github.com/trb1maker/microservices/internal/platform/health"
 )
@@ -44,13 +47,17 @@ type Subjects struct {
 type Config struct {
 	OrdersConn  string
 	RedisClient *goredis.Client
-	NatsConn    *nats.Conn
+	NatsClient  *natsx.Client
 	PaymentAddr string
 	JWTSecret   string
 	Subjects    Subjects
 }
 
-const defaultCartTTL = 24 * time.Hour
+const (
+	defaultCartTTL         = 24 * time.Hour
+	testOutboxPollInterval = 100 * time.Millisecond
+	testOutboxBatchSize    = 50
+)
 
 type Stack struct {
 	Server        *httptest.Server
@@ -58,6 +65,7 @@ type Stack struct {
 	PaymentClient *paymentgrpc.PaymentClient
 	OrdersPool    *pgxpool.Pool
 	cartRepo      *cartredis.CartRepository
+	relayCancel   context.CancelFunc
 }
 
 func SetupOrdersDatabase(ctx context.Context, connStr string) (*pgxpool.Pool, error) {
@@ -87,7 +95,7 @@ func SetupStack(ctx context.Context, cfg Config) (*Stack, error) {
 	cartRepo := cartredis.NewCartRepository(cfg.RedisClient, defaultCartTTL)
 	userRepo := userpostgres.NewUserRepository(ordersPool)
 	authService := app.NewAuthService(userRepo, cfg.JWTSecret, time.Hour)
-	events := natsadapter.NewPublisher(cfg.NatsConn, natsadapter.Subjects{
+	events := natsadapter.NewPublisher(cfg.NatsClient, natsadapter.Subjects{
 		OrderCreated:       cfg.Subjects.OrderCreated,
 		ReserveItems:       cfg.Subjects.ReserveItems,
 		ConfirmOrder:       cfg.Subjects.ConfirmOrder,
@@ -106,13 +114,27 @@ func SetupStack(ctx context.Context, cfg Config) (*Stack, error) {
 	}
 
 	cartService := app.NewCartService(cartRepo, events)
-	orderService := app.NewOrderService(cartRepo, orderRepo, events, paymentClient, app.NewNoopOrderMetrics())
-	consumer := natsconsumer.NewConsumer(cfg.NatsConn, natsconsumer.Subjects{
+	checkoutWriter := checkoutpostgres.NewWriter(ordersPool)
+	orderService := app.NewOrderService(
+		cartRepo,
+		orderRepo,
+		events,
+		paymentClient,
+		app.NewNoopOrderMetrics(),
+		checkoutWriter,
+		app.OrderCreatedSubject(cfg.Subjects.OrderCreated),
+	)
+
+	outboxRepo := outboxpostgres.NewRepository(ordersPool)
+	relayCancel := startOutboxRelay(ctx, outboxRepo, cfg.NatsClient)
+
+	consumer := natsconsumer.NewConsumer(cfg.NatsClient, natsconsumer.Subjects{
 		ItemsReserved:     cfg.Subjects.ItemsReserved,
 		ReservationFailed: cfg.Subjects.ReservationFailed,
 		OrderConfirmed:    cfg.Subjects.OrderConfirmed,
 	}, cartService, orderService)
-	if err := consumer.Start(); err != nil {
+	if err := consumer.Start(context.WithoutCancel(ctx)); err != nil {
+		relayCancel()
 		_ = paymentClient.Close()
 		ordersPool.Close()
 		return nil, fmt.Errorf("start order consumer: %w", err)
@@ -122,7 +144,7 @@ func SetupStack(ctx context.Context, cfg Config) (*Stack, error) {
 		"postgres": orderRepo.Ping,
 		"redis":    cartRepo.Ping,
 		"nats": func(context.Context) error {
-			if !cfg.NatsConn.IsConnected() {
+			if !cfg.NatsClient.Conn().IsConnected() {
 				return errNatsNotConnected
 			}
 			return nil
@@ -140,7 +162,18 @@ func SetupStack(ctx context.Context, cfg Config) (*Stack, error) {
 		PaymentClient: paymentClient,
 		OrdersPool:    ordersPool,
 		cartRepo:      cartRepo,
+		relayCancel:   relayCancel,
 	}, nil
+}
+
+func startOutboxRelay(ctx context.Context, store *outboxpostgres.Repository, client *natsx.Client) context.CancelFunc {
+	relay := outboxrelay.New(store, client, outboxrelay.Config{
+		PollInterval: testOutboxPollInterval,
+		BatchSize:    testOutboxBatchSize,
+	})
+	relayCtx, relayCancel := context.WithCancel(ctx)
+	go func() { _ = relay.Run(relayCtx) }()
+	return relayCancel
 }
 
 func (s *Stack) CartAllItemsReserved(ctx context.Context, userID string) bool {
@@ -161,6 +194,9 @@ func (s *Stack) CartAllItemsReserved(ctx context.Context, userID string) bool {
 func (s *Stack) Close() {
 	if s == nil {
 		return
+	}
+	if s.relayCancel != nil {
+		s.relayCancel()
 	}
 	if s.Server != nil {
 		s.Server.Close()
