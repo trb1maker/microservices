@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	natspkg "github.com/nats-io/nats.go"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -31,6 +30,7 @@ import (
 	notificationtestwire "github.com/trb1maker/microservices/internal/notification-service/testwire"
 	ordertestwire "github.com/trb1maker/microservices/internal/order-service/testwire"
 	paymenttestwire "github.com/trb1maker/microservices/internal/payment-service/testwire"
+	"github.com/trb1maker/microservices/internal/platform/natsx"
 	storetestwire "github.com/trb1maker/microservices/internal/store-service/testwire"
 	"github.com/trb1maker/microservices/tests/internal/natstest"
 
@@ -49,7 +49,7 @@ type env struct {
 	analyticsPool *pgxpool.Pool
 	mongoDB       *mongo.Database
 	minioClient   *minio.Client
-	natsConn      *natspkg.Conn
+	natsClient    *natsx.Client
 	token         string
 
 	storeWorker  *storetestwire.Worker
@@ -77,7 +77,7 @@ func newEnv(t *testing.T, opts ...envOptions) *env {
 
 	pgContainer, ordersConn, paymentsConn, analyticsConn := startPostgres(t, ctx)
 	redisClient, redisContainer := startRedis(t, ctx)
-	natsConn, natsContainer := startNATS(t, ctx)
+	natsClient, natsContainer := startNATS(t, ctx)
 	mongoDB, mongoContainer := startMongo(t, ctx)
 	minioEndpoint, minioClient, minioContainer := startMinIO(t, ctx)
 
@@ -90,7 +90,7 @@ func newEnv(t *testing.T, opts ...envOptions) *env {
 	require.NoError(t, err)
 	t.Cleanup(analyticsPool.Close)
 
-	storeWorker, err := storetestwire.SetupStore(ctx, mongoDB, natsConn, storetestwire.Subjects{
+	storeWorker, err := storetestwire.SetupStore(ctx, mongoDB, natsClient, storetestwire.Subjects{
 		ReserveItems:        reserveItemsSubject,
 		ConfirmOrder:        confirmOrderSubject,
 		ReleaseReservation:  releaseReservationSubject,
@@ -101,7 +101,7 @@ func newEnv(t *testing.T, opts ...envOptions) *env {
 	}, storetestwire.Options{GateConfirm: options.gateConfirm})
 	require.NoError(t, err)
 
-	paymentGRPC, err := paymenttestwire.StartInsecureGRPC(ctx, paymentsPool, natsConn, paymenttestwire.Subjects{
+	paymentGRPC, err := paymenttestwire.StartInsecureGRPC(ctx, paymentsPool, natsClient, paymenttestwire.Subjects{
 		PaymentSucceeded: paymentSucceededSubject,
 		PaymentFailed:    paymentFailedSubject,
 		RefundSucceeded:  refundSucceededSubject,
@@ -109,7 +109,7 @@ func newEnv(t *testing.T, opts ...envOptions) *env {
 	})
 	require.NoError(t, err)
 
-	notification, err := notificationtestwire.StartConsumer(natsConn, notificationtestwire.Subjects{
+	notification, err := notificationtestwire.StartConsumer(ctx, natsClient, notificationtestwire.Subjects{
 		OrderFinalized:   orderFinalizedSubject,
 		OrderCancelled:   orderCancelledSubject,
 		PaymentSucceeded: paymentSucceededSubject,
@@ -117,18 +117,18 @@ func newEnv(t *testing.T, opts ...envOptions) *env {
 	})
 	require.NoError(t, err)
 
-	analytics, err := analyticstestwire.StartConsumer(ctx, natsConn, analyticsPool, analyticstestwire.MinIOConfig{
+	analytics, err := analyticstestwire.StartConsumerWithHTTP(ctx, natsClient, analyticsPool, analyticstestwire.MinIOConfig{
 		Endpoint:  minioEndpoint,
 		AccessKey: minioAccessKey,
 		SecretKey: minioSecretKey,
 		Bucket:    minioBucket,
-	}, orderFinalizedSubject)
+	}, orderFinalizedSubject, testJWTSecret)
 	require.NoError(t, err)
 
 	orderStack, err := ordertestwire.SetupStack(ctx, ordertestwire.Config{
 		OrdersConn:  ordersConn,
 		RedisClient: redisClient,
-		NatsConn:    natsConn,
+		NatsClient:  natsClient,
 		PaymentAddr: paymentGRPC.Addr,
 		JWTSecret:   testJWTSecret,
 		Subjects: ordertestwire.Subjects{
@@ -152,7 +152,7 @@ func newEnv(t *testing.T, opts ...envOptions) *env {
 		analyticsPool:  analyticsPool,
 		mongoDB:        mongoDB,
 		minioClient:    minioClient,
-		natsConn:       natsConn,
+		natsClient:     natsClient,
 		storeWorker:    storeWorker,
 		notification:   notification,
 		analytics:      analytics,
@@ -171,7 +171,7 @@ func newEnv(t *testing.T, opts ...envOptions) *env {
 		notification.Close()
 		analytics.Close()
 		paymentGRPC.Close()
-		natsConn.Close()
+		natsClient.Conn().Close()
 		_ = redisClient.Close()
 		_ = pgContainer.Terminate(context.Background())
 		_ = redisContainer.Terminate(context.Background())
@@ -226,14 +226,14 @@ func startRedis(t *testing.T, ctx context.Context) (*goredis.Client, testcontain
 	return client, redisContainer
 }
 
-func startNATS(t *testing.T, ctx context.Context) (*natspkg.Conn, testcontainers.Container) {
+func startNATS(t *testing.T, ctx context.Context) (*natsx.Client, testcontainers.Container) {
 	t.Helper()
 	natsContainer, err := tcnats.Run(ctx, natstest.Image, natstest.ContainerOptions()...)
 	require.NoError(t, err)
 	natsURL, err := natsContainer.ConnectionString(ctx)
 	require.NoError(t, err)
-	nc := natstest.Connect(t, natsURL)
-	return nc, natsContainer
+	client := natstest.NewClient(t, natsURL)
+	return client, natsContainer
 }
 
 func startMongo(t *testing.T, ctx context.Context) (*mongo.Database, testcontainers.Container) {
@@ -401,6 +401,36 @@ func (e *env) countPaymentTransactions(t *testing.T, orderID string) int {
 	return count
 }
 
+func (e *env) countReceiptDocuments(t *testing.T, orderID string) int {
+	t.Helper()
+	var count int
+	err := e.analyticsPool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM receipt_documents WHERE order_id = $1`, orderID).Scan(&count)
+	require.NoError(t, err)
+	return count
+}
+
+func (e *env) doAnalyticsJSON(t *testing.T, method, path, token, body string) *http.Response {
+	t.Helper()
+	baseURL := e.analytics.HTTPURL()
+	require.NotEmpty(t, baseURL)
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), method, baseURL+path, reader)
+	require.NoError(t, err)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	return resp
+}
+
 func (e *env) publishDuplicateFinalized(t *testing.T, orderID string) {
 	t.Helper()
 	payload, err := json.Marshal(map[string]any{
@@ -411,6 +441,6 @@ func (e *env) publishDuplicateFinalized(t *testing.T, orderID string) {
 		"finalized_at": time.Now().UTC().Format(time.RFC3339),
 	})
 	require.NoError(t, err)
-	require.NoError(t, e.natsConn.Publish(orderFinalizedSubject, payload))
-	require.NoError(t, e.natsConn.Flush())
+	require.NoError(t, e.natsClient.Publish(context.Background(), orderFinalizedSubject, payload))
+	require.NoError(t, e.natsClient.Conn().Flush())
 }

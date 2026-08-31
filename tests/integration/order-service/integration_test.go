@@ -21,16 +21,19 @@ import (
 	"github.com/trb1maker/microservices/tests/internal/natstest"
 
 	cartredis "github.com/trb1maker/microservices/internal/order-service/adapters/cart_repository/redis"
+	checkoutpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/checkout_writer/postgres"
 	natsconsumer "github.com/trb1maker/microservices/internal/order-service/adapters/event_consumer/nats"
 	natsadapter "github.com/trb1maker/microservices/internal/order-service/adapters/event_publisher/nats"
 	httpadapter "github.com/trb1maker/microservices/internal/order-service/adapters/http"
 	orderpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/order_repository/postgres"
+	outboxrelay "github.com/trb1maker/microservices/internal/order-service/adapters/outbox_relay"
+	outboxpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/outbox_repository/postgres"
 	userpostgres "github.com/trb1maker/microservices/internal/order-service/adapters/user_repository/postgres"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
-	natspkg "github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,6 +42,8 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/modules/redis"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/trb1maker/microservices/internal/platform/natsx"
 )
 
 const (
@@ -66,7 +71,7 @@ type testEnv struct {
 	server         *httptest.Server
 	pool           *pgxpool.Pool
 	redis          *goredis.Client
-	natsConn       *natspkg.Conn
+	natsClient     *natsx.Client
 	cartRepo       app.CartRepository
 	pgContainer    testcontainers.Container
 	redisContainer testcontainers.Container
@@ -84,6 +89,7 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	ctx, cancel := context.WithTimeout(context.Background(), startupTimeout)
 	defer cancel()
+	consumerCtx := context.WithoutCancel(ctx)
 
 	pgContainer, err := postgres.Run(
 		ctx,
@@ -130,17 +136,17 @@ func newTestEnv(t *testing.T) *testEnv {
 	natsURL, err := natsContainer.ConnectionString(ctx)
 	require.NoError(t, err)
 
-	natsConn := natstest.Connect(t, natsURL)
-	t.Cleanup(natsConn.Close)
+	natsClient := natstest.NewClient(t, natsURL)
+	t.Cleanup(natsClient.Conn().Close)
 
-	_, err = natsConn.Subscribe(reserveItemsSubject, func(msg *natspkg.Msg) {
+	_, err = natsClient.ConsumeDurable(consumerCtx, "CART", "test-mock-store-reserve", reserveItemsSubject, func(_ context.Context, msg *nats.Msg) error {
 		var req struct {
 			UserID    string `json:"user_id"`
 			ProductID string `json:"product_id"`
 			Quantity  int    `json:"quantity"`
 		}
 		if err := json.Unmarshal(msg.Data, &req); err != nil {
-			return
+			return nil
 		}
 		payload, err := json.Marshal(app.ItemsReserved{
 			OrderID:   msg.Header.Get("X-Order-ID"),
@@ -150,17 +156,17 @@ func newTestEnv(t *testing.T) *testEnv {
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 		})
 		if err != nil {
-			return
+			return nil
 		}
-		_ = natsConn.Publish(itemsReservedSubject, payload)
-	})
+		return natsClient.Publish(context.Background(), itemsReservedSubject, payload)
+	}, natsx.DurableConsumerConfig{})
 	require.NoError(t, err)
 
 	orderRepo := orderpostgres.NewOrderRepository(pool)
 	cartRepo := cartredis.NewCartRepository(redisClient, 24*time.Hour)
 	userRepo := userpostgres.NewUserRepository(pool)
 	authService := app.NewAuthService(userRepo, testJWTSecret, time.Hour)
-	events := natsadapter.NewPublisher(natsConn, natsadapter.Subjects{
+	events := natsadapter.NewPublisher(natsClient, natsadapter.Subjects{
 		OrderCreated:       orderCreatedSubject,
 		ReserveItems:       reserveItemsSubject,
 		ConfirmOrder:       confirmOrderSubject,
@@ -171,19 +177,19 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	cartService := app.NewCartService(cartRepo, events)
 	orderService := app.NewOrderService(cartRepo, orderRepo, events, app.NewNoopPaymentClient(), app.NewNoopOrderMetrics())
-	consumer := natsconsumer.NewConsumer(natsConn, natsconsumer.Subjects{
+	consumer := natsconsumer.NewConsumer(natsClient, natsconsumer.Subjects{
 		ItemsReserved:     itemsReservedSubject,
 		ReservationFailed: "store.reservation_failed",
 		OrderConfirmed:    orderConfirmedSubject,
 	}, cartService, orderService)
-	require.NoError(t, consumer.Start())
+	require.NoError(t, consumer.Start(consumerCtx))
 	t.Cleanup(consumer.Close)
 
 	checks := map[string]health.CheckFunc{
 		"postgres": orderRepo.Ping,
 		"redis":    cartRepo.Ping,
 		"nats": func(context.Context) error {
-			if !natsConn.IsConnected() {
+			if !natsClient.Conn().IsConnected() {
 				return fmt.Errorf("nats is not connected")
 			}
 			return nil
@@ -201,7 +207,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		server:         server,
 		pool:           pool,
 		redis:          redisClient,
-		natsConn:       natsConn,
+		natsClient:     natsClient,
 		cartRepo:       cartRepo,
 		pgContainer:    pgContainer,
 		redisContainer: redisContainer,
@@ -233,6 +239,13 @@ func (env *testEnv) login(t *testing.T, email, password string) string {
 	return body.AccessToken
 }
 
+func (env *testEnv) subscribeJS(t *testing.T, subject string, durable string, handler natsx.Handler) {
+	t.Helper()
+	stream := natsx.StreamForSubject(subject)
+	_, err := env.natsClient.ConsumeDurable(context.Background(), stream, durable, subject, handler, natsx.DurableConsumerConfig{})
+	require.NoError(t, err)
+}
+
 func TestIntegration_Ready(t *testing.T) {
 	env := newTestEnv(t)
 
@@ -259,16 +272,15 @@ func TestIntegration_CheckoutHappyPath(t *testing.T) {
 	productID := uuid.New().String()
 
 	eventCh := make(chan []byte, 1)
-	sub, err := env.natsConn.Subscribe(orderCreatedSubject, func(msg *natspkg.Msg) {
+	env.subscribeJS(t, orderCreatedSubject, "test-checkout-order-created", func(_ context.Context, msg *nats.Msg) error {
 		payload := make([]byte, len(msg.Data))
 		copy(payload, msg.Data)
 		select {
 		case eventCh <- payload:
 		default:
 		}
+		return nil
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sub.Unsubscribe() })
 
 	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
@@ -338,14 +350,13 @@ func TestIntegration_CheckoutEmptyCart(t *testing.T) {
 	env := newTestEnv(t)
 
 	eventCh := make(chan struct{}, 1)
-	sub, err := env.natsConn.Subscribe(orderCreatedSubject, func(_ *natspkg.Msg) {
+	env.subscribeJS(t, orderCreatedSubject, "test-empty-cart-order-created", func(_ context.Context, _ *nats.Msg) error {
 		select {
 		case eventCh <- struct{}{}:
 		default:
 		}
+		return nil
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sub.Unsubscribe() })
 
 	resp := env.doJSON(t, http.MethodPost, "/orders", env.token, `{"delivery_address":"Moscow"}`)
 	t.Cleanup(func() { _ = resp.Body.Close() })
@@ -366,23 +377,21 @@ func TestIntegration_CancelOrder(t *testing.T) {
 	cancelledCh := make(chan []byte, 1)
 	releaseCh := make(chan []byte, 1)
 
-	cancelSub, err := env.natsConn.Subscribe(orderCancelledSubject, func(msg *natspkg.Msg) {
+	env.subscribeJS(t, orderCancelledSubject, "test-cancel-order-cancelled", func(_ context.Context, msg *nats.Msg) error {
 		select {
 		case cancelledCh <- msg.Data:
 		default:
 		}
+		return nil
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = cancelSub.Unsubscribe() })
 
-	releaseSub, err := env.natsConn.Subscribe(releaseReservationSubject, func(msg *natspkg.Msg) {
+	env.subscribeJS(t, releaseReservationSubject, "test-cancel-order-release", func(_ context.Context, msg *nats.Msg) error {
 		select {
 		case releaseCh <- msg.Data:
 		default:
 		}
+		return nil
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = releaseSub.Unsubscribe() })
 
 	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
@@ -516,14 +525,13 @@ func TestIntegration_PayToConfirmed_SimulatedStoreConfirm(t *testing.T) {
 	productID := uuid.New().String()
 
 	finalizedCh := make(chan []byte, 1)
-	sub, err := env.natsConn.Subscribe(orderFinalizedSubject, func(msg *natspkg.Msg) {
+	env.subscribeJS(t, orderFinalizedSubject, "test-pay-confirmed-finalized", func(_ context.Context, msg *nats.Msg) error {
 		select {
 		case finalizedCh <- msg.Data:
 		default:
 		}
+		return nil
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sub.Unsubscribe() })
 
 	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
 		`{"product_id":"%s","quantity":1,"unit_price":100}`,
@@ -560,7 +568,7 @@ func TestIntegration_PayToConfirmed_SimulatedStoreConfirm(t *testing.T) {
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	})
 	require.NoError(t, err)
-	require.NoError(t, env.natsConn.Publish(orderConfirmedSubject, confirmedPayload))
+	require.NoError(t, env.natsClient.Publish(context.Background(), orderConfirmedSubject, confirmedPayload))
 
 	require.Eventually(t, func() bool {
 		getResp := env.doJSON(t, http.MethodGet, "/orders/"+order.OrderID, env.token, "")
@@ -660,6 +668,211 @@ func TestIntegration_ListOrders(t *testing.T) {
 	require.NoError(t, json.NewDecoder(listResp.Body).Decode(&body))
 	require.Len(t, body.Orders, 1)
 	assert.Equal(t, "RESERVED", body.Orders[0].Status)
+}
+
+func TestIntegration_OutboxCheckoutRelay(t *testing.T) {
+	env := newOutboxTestEnv(t)
+
+	productID := uuid.New().String()
+	eventCh := make(chan []byte, 1)
+	env.subscribeJS(t, orderCreatedSubject, "test-outbox-order-created", func(_ context.Context, msg *nats.Msg) error {
+		payload := make([]byte, len(msg.Data))
+		copy(payload, msg.Data)
+		select {
+		case eventCh <- payload:
+		default:
+		}
+		return nil
+	})
+
+	addResp := env.doJSON(t, http.MethodPost, "/cart/items", env.token, fmt.Sprintf(
+		`{"product_id":"%s","quantity":1,"unit_price":100}`,
+		productID,
+	))
+	require.Equal(t, http.StatusCreated, addResp.StatusCode)
+	_ = addResp.Body.Close()
+	env.waitForReservedCart(t)
+
+	checkoutResp := env.doJSON(t, http.MethodPost, "/orders", env.token, `{"delivery_address":"Outbox Street"}`)
+	t.Cleanup(func() { _ = checkoutResp.Body.Close() })
+	require.Equal(t, http.StatusCreated, checkoutResp.StatusCode)
+
+	var order struct {
+		OrderID string `json:"order_id"`
+	}
+	require.NoError(t, json.NewDecoder(checkoutResp.Body).Decode(&order))
+	require.NotEmpty(t, order.OrderID)
+
+	require.Eventually(t, func() bool {
+		var unpublished int64
+		if err := env.pool.QueryRow(context.Background(),
+			`SELECT COUNT(*) FROM outbox WHERE published_at IS NULL`).Scan(&unpublished); err != nil {
+			return false
+		}
+		return unpublished == 0
+	}, 5*time.Second, 100*time.Millisecond)
+
+	var receivedPayload []byte
+	require.Eventually(t, func() bool {
+		select {
+		case payload := <-eventCh:
+			receivedPayload = append([]byte(nil), payload...)
+			return true
+		default:
+			return false
+		}
+	}, 5*time.Second, 100*time.Millisecond)
+
+	var created app.OrderCreated
+	require.NoError(t, json.Unmarshal(receivedPayload, &created))
+	assert.Equal(t, order.OrderID, created.OrderID)
+}
+
+func newOutboxTestEnv(t *testing.T) *testEnv {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), startupTimeout)
+	defer cancel()
+	consumerCtx := context.WithoutCancel(ctx)
+
+	pgContainer, err := postgres.Run(
+		ctx,
+		"postgres:18.4-alpine",
+		postgres.WithDatabase("orders"),
+		postgres.WithUsername("orders"),
+		postgres.WithPassword("orders"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
+		),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pgContainer.Terminate(context.Background()) })
+
+	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+
+	pool, err := pgxpool.New(ctx, connStr)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+
+	db := stdlib.OpenDBFromPool(pool)
+	require.NoError(t, migrations.Up(db))
+	t.Cleanup(func() { _ = db.Close() })
+
+	redisContainer, err := redis.Run(ctx, "redis:8.8-alpine")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = redisContainer.Terminate(context.Background()) })
+
+	redisConnStr, err := redisContainer.ConnectionString(ctx)
+	require.NoError(t, err)
+	redisOpts, err := goredis.ParseURL(redisConnStr)
+	require.NoError(t, err)
+	redisClient := goredis.NewClient(redisOpts)
+	t.Cleanup(func() { _ = redisClient.Close() })
+	require.NoError(t, redisClient.Ping(ctx).Err())
+
+	natsContainer, err := tcnats.Run(ctx, natstest.Image, natstest.ContainerOptions()...)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = natsContainer.Terminate(context.Background()) })
+
+	natsURL, err := natsContainer.ConnectionString(ctx)
+	require.NoError(t, err)
+	natsClient := natstest.NewClient(t, natsURL)
+	t.Cleanup(natsClient.Conn().Close)
+
+	_, err = natsClient.ConsumeDurable(consumerCtx, "CART", "test-outbox-store-reserve", reserveItemsSubject, func(_ context.Context, msg *nats.Msg) error {
+		var req struct {
+			UserID    string `json:"user_id"`
+			ProductID string `json:"product_id"`
+			Quantity  int    `json:"quantity"`
+		}
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			return nil
+		}
+		payload, err := json.Marshal(app.ItemsReserved{
+			OrderID:   msg.Header.Get("X-Order-ID"),
+			UserID:    req.UserID,
+			ProductID: req.ProductID,
+			Quantity:  req.Quantity,
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		})
+		if err != nil {
+			return nil
+		}
+		return natsClient.Publish(context.Background(), itemsReservedSubject, payload)
+	}, natsx.DurableConsumerConfig{})
+	require.NoError(t, err)
+
+	orderRepo := orderpostgres.NewOrderRepository(pool)
+	cartRepo := cartredis.NewCartRepository(redisClient, 24*time.Hour)
+	userRepo := userpostgres.NewUserRepository(pool)
+	authService := app.NewAuthService(userRepo, testJWTSecret, time.Hour)
+	events := natsadapter.NewPublisher(natsClient, natsadapter.Subjects{
+		OrderCreated:       orderCreatedSubject,
+		ReserveItems:       reserveItemsSubject,
+		ConfirmOrder:       confirmOrderSubject,
+		ReleaseReservation: releaseReservationSubject,
+		OrderFinalized:     orderFinalizedSubject,
+		OrderCancelled:     orderCancelledSubject,
+	})
+
+	checkoutWriter := checkoutpostgres.NewWriter(pool)
+	outboxRepo := outboxpostgres.NewRepository(pool)
+	relay := outboxrelay.New(outboxRepo, natsClient, outboxrelay.Config{
+		PollInterval: 100 * time.Millisecond,
+		BatchSize:    50,
+	})
+	relayCtx, relayCancel := context.WithCancel(context.Background())
+	t.Cleanup(relayCancel)
+	go func() { _ = relay.Run(relayCtx) }()
+
+	cartService := app.NewCartService(cartRepo, events)
+	orderService := app.NewOrderService(
+		cartRepo,
+		orderRepo,
+		events,
+		checkoutWriter,
+		app.OrderCreatedSubject(orderCreatedSubject),
+	)
+	consumer := natsconsumer.NewConsumer(natsClient, natsconsumer.Subjects{
+		ItemsReserved:     itemsReservedSubject,
+		ReservationFailed: "store.reservation_failed",
+		OrderConfirmed:    orderConfirmedSubject,
+	}, cartService, orderService)
+	require.NoError(t, consumer.Start(consumerCtx))
+	t.Cleanup(consumer.Close)
+
+	checks := map[string]health.CheckFunc{
+		"postgres": orderRepo.Ping,
+		"redis":    cartRepo.Ping,
+		"nats": func(context.Context) error {
+			if !natsClient.Conn().IsConnected() {
+				return fmt.Errorf("nats is not connected")
+			}
+			return nil
+		},
+	}
+
+	handler := httpadapter.NewHandler(cartService, orderService, health.NewChecker(checks), nil)
+	server := httptest.NewServer(httpadapter.NewServer(httpadapter.ServerConfig{
+		Addr: ":8080",
+		Auth: &httpadapter.AuthConfig{JWTSecret: testJWTSecret},
+	}, handler, httpadapter.NewAppAuthAdapter(authService), nil).Handler)
+	t.Cleanup(server.Close)
+
+	env := &testEnv{
+		server:         server,
+		pool:           pool,
+		redis:          redisClient,
+		natsClient:     natsClient,
+		cartRepo:       cartRepo,
+		pgContainer:    pgContainer,
+		redisContainer: redisContainer,
+		natsContainer:  natsContainer,
+		userID:         "11111111-1111-4111-8111-111111111111",
+	}
+	env.token = env.login(t, "demo@example.com", "demo123")
+	return env
 }
 
 func (env *testEnv) waitForReservedCart(t *testing.T) {

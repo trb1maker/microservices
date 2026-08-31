@@ -50,6 +50,32 @@ func TestE2E_HappyPath(t *testing.T) {
 	assert.Equal(t, orderID, receipt.OrderID)
 	assert.Equal(t, testUnitPrice, receipt.TotalAmount)
 
+	require.Eventually(t, func() bool {
+		return env.countReceiptDocuments(t, orderID) == 1
+	}, 10*time.Second, pollInterval)
+
+	receiptResp := env.doAnalyticsJSON(t, http.MethodGet, "/receipts/"+orderID, env.token, "")
+	require.Equal(t, http.StatusOK, receiptResp.StatusCode)
+	var receiptURL struct {
+		URL       string `json:"url"`
+		ExpiresIn int64  `json:"expires_in"`
+	}
+	require.NoError(t, json.NewDecoder(receiptResp.Body).Decode(&receiptURL))
+	_ = receiptResp.Body.Close()
+	assert.Contains(t, receiptURL.URL, orderID)
+
+	searchResp := env.doAnalyticsJSON(t, http.MethodGet, "/receipts/search?q=Moscow", env.token, "")
+	require.Equal(t, http.StatusOK, searchResp.StatusCode)
+	var searchBody struct {
+		Results []struct {
+			OrderID string `json:"order_id"`
+		} `json:"results"`
+	}
+	require.NoError(t, json.NewDecoder(searchResp.Body).Decode(&searchBody))
+	_ = searchResp.Body.Close()
+	require.Len(t, searchBody.Results, 1)
+	assert.Equal(t, orderID, searchBody.Results[0].OrderID)
+
 	assert.Equal(t, 1, env.countProcessedOrders(t, orderID))
 	assert.Equal(t, 1, env.countPaymentTransactions(t, orderID))
 	assert.Equal(t, 0, env.stockReserved(t))

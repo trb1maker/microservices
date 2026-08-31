@@ -73,8 +73,9 @@ func TestPaymentServiceIntegration(t *testing.T) {
 	natsURI, err := natsContainer.ConnectionString(ctx)
 	require.NoError(t, err)
 
-	nc := natstest.Connect(t, natsURI)
-	defer nc.Close()
+	natsClient := natstest.NewClient(t, natsURI)
+	defer natsClient.Conn().Close()
+	nc := natsClient.Conn()
 
 	_, err = pool.Exec(ctx, `INSERT INTO accounts (user_id, balance, version) VALUES ($1, $2, $3)`,
 		"test-user-1", 100000, 1)
@@ -86,7 +87,7 @@ func TestPaymentServiceIntegration(t *testing.T) {
 
 	accountRepo := pgadapter.NewAccountRepository(pool)
 	txRepo := pgadapter.NewTransactionRepository(pool)
-	eventPub := eventpublisher.NewNATSEventPublisher(nc, "payment.succeeded", "payment.failed", "payment.refund_succeeded", "payment.refund_failed")
+	eventPub := eventpublisher.NewNATSEventPublisher(natsClient, "payment.succeeded", "payment.failed", "payment.refund_succeeded", "payment.refund_failed")
 	svc := app.NewPaymentService(accountRepo, txRepo, eventPub)
 
 	t.Run("Charge_Success", func(t *testing.T) {
@@ -267,11 +268,11 @@ func TestDemoUserAccountsMigration(t *testing.T) {
 	natsURI, err := natsContainer.ConnectionString(ctx)
 	require.NoError(t, err)
 
-	nc := natstest.Connect(t, natsURI)
-	defer nc.Close()
+	natsClient := natstest.NewClient(t, natsURI)
+	defer natsClient.Conn().Close()
 
 	txRepo := pgadapter.NewTransactionRepository(pool)
-	eventPub := eventpublisher.NewNATSEventPublisher(nc, "payment.succeeded", "payment.failed", "payment.refund_succeeded", "payment.refund_failed")
+	eventPub := eventpublisher.NewNATSEventPublisher(natsClient, "payment.succeeded", "payment.failed", "payment.refund_succeeded", "payment.refund_failed")
 	svc := app.NewPaymentService(accountRepo, txRepo, eventPub)
 
 	result, err := svc.Charge(ctx, "ui-demo-order-1", demoUsers[0], 2500)
