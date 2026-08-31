@@ -137,8 +137,8 @@ func TestPaymentServiceIntegration(t *testing.T) {
 
 		refundResult2, err := svc.Refund(ctx, "order-int-5", "test-user-1", 5000, chargeResult.TransactionID)
 		require.NoError(t, err)
-		assert.Equal(t, domain.TransactionStatusFailed, refundResult2.Status)
-		assert.Equal(t, "transaction has already been refunded", refundResult2.Message)
+		assert.Equal(t, refundResult.TransactionID, refundResult2.TransactionID)
+		assert.Equal(t, domain.TransactionStatusSucceeded, refundResult2.Status)
 	})
 
 	t.Run("NATSEventPublished", func(t *testing.T) {
