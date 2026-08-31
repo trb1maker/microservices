@@ -174,6 +174,7 @@ func (h *Handler) ListOrders(w http.ResponseWriter, r *http.Request) {
 // @Failure      402 {object} errorResponse
 // @Failure      404 {object} errorResponse
 // @Failure      409 {object} errorResponse
+// @Failure      503 {object} errorResponse
 // @Security     BearerAuth
 // @Router       /orders/{id}/pay [post]
 func (h *Handler) PayOrder(w http.ResponseWriter, r *http.Request) {

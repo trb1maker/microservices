@@ -68,6 +68,12 @@ func NewStatusDashboard(readiness ReadinessChecker, remote RemoteHealthChecker) 
 }
 
 func (d *StatusDashboard) Build(ctx context.Context) StatusPageData {
+	if d.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d.timeout)
+		defer cancel()
+	}
+
 	items := []StatusItem{
 		{Name: "Order Service", Status: statusOK, StatusClass: statusOK, Detail: "process running", Endpoint: "order-service"},
 	}
