@@ -131,7 +131,7 @@ func (s *StoreService) ConfirmOrder(ctx context.Context, req ConfirmOrderRequest
 
 		if stock.Reserved < req.Quantity {
 			s.publishReservationFailed(ctx, req.OrderID, req.UserID, req.ProductID, req.Quantity, "reservation not found")
-			return fmt.Errorf("%w: %d < %d", errInsufficientReserved, stock.Reserved, req.Quantity)
+			return nil
 		}
 
 		stock.Confirm(req.Quantity)

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -148,6 +149,10 @@ func (s *CartService) HandleReservationFailed(ctx context.Context, event Reserva
 	}
 
 	if err := cart.MarkItemFailed(domain.ProductID(productID)); err != nil {
+		if errors.Is(err, domain.ErrItemNotFound) {
+			// Cart is cleared after checkout; order service handles compensation.
+			return nil
+		}
 		return fmt.Errorf("mark item failed: %w", err)
 	}
 

@@ -120,6 +120,33 @@ func TestCartService_getOrCreateCart_repoGetError(t *testing.T) {
 	assert.ErrorIs(t, err, errRepoUnavailable)
 }
 
+func TestCartService_HandleReservationFailed_clearedCartIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	repo := newStubCartRepo()
+	service := NewCartService(repo)
+	userID := domain.UserID(uuid.New())
+	productID := domain.ProductID(uuid.New())
+
+	cart, err := domain.NewCart(userID, mustOrderItem(t, productID))
+	require.NoError(t, err)
+	cart.Clear()
+	repo.carts[userID] = cart
+
+	err = service.HandleReservationFailed(t.Context(), ReservationFailed{
+		UserID:    uuid.UUID(userID).String(),
+		ProductID: uuid.UUID(productID).String(),
+	})
+	require.NoError(t, err)
+}
+
+func mustOrderItem(t *testing.T, productID domain.ProductID) domain.OrderItem {
+	t.Helper()
+	item, err := domain.NewOrderItem(productID, 1, 100)
+	require.NoError(t, err)
+	return *item
+}
+
 func TestCartService_AddItem_repoSaveError(t *testing.T) {
 	t.Parallel()
 
